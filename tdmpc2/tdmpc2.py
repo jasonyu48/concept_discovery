@@ -306,24 +306,41 @@ class TDMPC2(torch.nn.Module):
 		else:
 			termination_loss = 0.
 		value_loss = value_loss / (self.cfg.horizon * self.cfg.num_q)
+		
+		# Compute policy loss
+		if self.cfg.grad_from_policy:
+			zs_for_pi = zs
+		else:
+			zs_for_pi = zs.detach()
+		
+		action_pi, info_pi = self.model.pi(zs_for_pi, task)
+		qs_pi = self.model.Q(zs_for_pi, action_pi, task, return_type='avg', detach=True)
+		self.scale.update(qs_pi[0])
+		qs_pi = self.scale(qs_pi)
+		rho = torch.pow(self.cfg.rho, torch.arange(len(qs_pi), device=self.device))
+		pi_loss = (-(self.cfg.entropy_coef * info_pi["scaled_entropy"] + qs_pi).mean(dim=(1,2)) * rho).mean()
+		
+		# Combine all losses
 		total_loss = (
 			self.cfg.consistency_coef * consistency_loss +
 			self.cfg.reward_coef * reward_loss +
 			self.cfg.termination_coef * termination_loss +
-			self.cfg.value_coef * value_loss
+			self.cfg.value_coef * value_loss +
+			pi_loss  # Add policy loss to total
 		)
 
-		# Update model
+		# Single backward pass for all losses
 		total_loss.backward()
+		
+		# Update both model and policy
 		grad_norm = torch.nn.utils.clip_grad_norm_(self.model.parameters(), self.cfg.grad_clip_norm)
+		pi_grad_norm = torch.nn.utils.clip_grad_norm_(self.model._pi.parameters(), self.cfg.grad_clip_norm)
+		
 		self.optim.step()
+		self.pi_optim.step()
+		
 		self.optim.zero_grad(set_to_none=True)
-
-		# Update policy
-		if self.cfg.grad_from_policy:
-			pi_info = self.update_pi(zs, task)
-		else:
-			pi_info = self.update_pi(zs.detach(), task)
+		self.pi_optim.zero_grad(set_to_none=True)
 
 		# Update target Q-functions
 		self.model.soft_update_target_Q()
@@ -337,10 +354,14 @@ class TDMPC2(torch.nn.Module):
 			"termination_loss": termination_loss,
 			"total_loss": total_loss,
 			"grad_norm": grad_norm,
+			"pi_loss": pi_loss,
+			"pi_grad_norm": pi_grad_norm,
+			"pi_entropy": info_pi["entropy"],
+			"pi_scaled_entropy": info_pi["scaled_entropy"],
+			"pi_scale": self.scale.value,
 		})
 		if self.cfg.episodic:
 			info.update(math.termination_statistics(torch.sigmoid(termination_pred[-1]), terminated[-1]))
-		info.update(pi_info)
 		return info.detach().mean()
 
 	def update(self, buffer):
