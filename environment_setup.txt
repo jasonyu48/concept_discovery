@@ -1,0 +1,36 @@
+conda create -n tdmpc2 python=3.9 -y
+conda activate tdmpc2
+conda install -c pytorch-nightly -c nvidia -c conda-forge pytorch=2.6.0.dev20241112 pytorch-cuda=12.4 torchvision=0.15.2 -y
+
+pip install \
+  dm-control==1.0.16 \
+  glfw==2.7.0 \
+  gymnasium==0.29.1 \
+  ffmpeg==1.4 \
+  imageio==2.34.1 \
+  imageio-ffmpeg==0.4.9 \
+  h5py==3.11.0 \
+  hydra-core==1.3.2 \
+  hydra-submitit-launcher==1.2.0 \
+  submitit==1.5.1 \
+  omegaconf==2.3.0 \
+  moviepy==1.0.3 \
+  mujoco==3.1.2 \
+  numpy==1.24.4 \
+  tensordict-nightly==2025.1.1 \
+  torchrl-nightly==2025.1.1 \
+  kornia==0.7.2 \
+  termcolor==2.4.0 \
+  tqdm==4.66.4 \
+  pandas==2.0.3 \
+  wandb==0.17.4 \
+  gpustat
+
+# set environmental variables
+export MUJOCO_GL=egl
+export PYOPENGL_PLATFORM=egl
+
+#test run
+python train.py task=cheetah-run ++enable_wandb=false
+
+
