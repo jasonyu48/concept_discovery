@@ -285,6 +285,8 @@ class TDMPC2(torch.nn.Module):
 
 		# Predictions
 		_zs = zs[:-1]
+		if self.cfg.no_grad_from_Q_R:
+			_zs = _zs.detach()
 		qs = self.model.Q(_zs, action, task, return_type='all')
 		reward_preds = self.model.reward(_zs, action, task)
 		if self.cfg.episodic:
