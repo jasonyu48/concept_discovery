@@ -29,7 +29,7 @@ discount_max: 0.995
 buffer_size: 1_000_000
 exp_name: no_sg
 data_dir: ???
-encoder_grad_next_z: true
+no_JEPA_sg: true
 
 # planning
 mpc: true
