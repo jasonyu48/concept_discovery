@@ -27,10 +27,11 @@ discount_denom: 5
 discount_min: 0.95
 discount_max: 0.995
 buffer_size: 1_000_000
-exp_name: no_sg_Q_R
+exp_name: grad_from_policy
 data_dir: ???
 no_JEPA_sg: true
 no_grad_from_Q_R: true
+grad_from_policy: true
 
 # planning
 mpc: true

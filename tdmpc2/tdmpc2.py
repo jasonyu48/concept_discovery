@@ -320,7 +320,10 @@ class TDMPC2(torch.nn.Module):
 		self.optim.zero_grad(set_to_none=True)
 
 		# Update policy
-		pi_info = self.update_pi(zs.detach(), task)
+		if self.cfg.grad_from_policy:
+			pi_info = self.update_pi(zs, task)
+		else:
+			pi_info = self.update_pi(zs.detach(), task)
 
 		# Update target Q-functions
 		self.model.soft_update_target_Q()
