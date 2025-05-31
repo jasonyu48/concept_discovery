@@ -258,13 +258,20 @@ class TDMPC2(torch.nn.Module):
 		return reward + discount * (1-terminated) * self.model.Q(next_z, action, task, return_type='min', target=True)
 
 	def _update(self, obs, action, reward, terminated, task=None):
-		# Compute targets
-		with torch.no_grad():
-			next_z = self.model.encode(obs[1:], task)
-			td_targets = self._td_target(next_z, reward, terminated, task)
-
 		# Prepare for update
 		self.model.train()
+		
+		# Compute targets
+		if self.cfg.encoder_grad_next_z:
+			# Encode next_z with gradients enabled
+			next_z = self.model.encode(obs[1:], task)
+			with torch.no_grad():
+				td_targets = self._td_target(next_z, reward, terminated, task)
+		else:
+			# Encode next_z without gradients (original behavior)
+			with torch.no_grad():
+				next_z = self.model.encode(obs[1:], task)
+				td_targets = self._td_target(next_z, reward, terminated, task)
 
 		# Latent rollout
 		zs = torch.empty(self.cfg.horizon+1, self.cfg.batch_size, self.cfg.latent_dim, device=self.device)

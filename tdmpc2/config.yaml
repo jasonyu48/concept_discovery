@@ -2,7 +2,7 @@ defaults:
     - override hydra/launcher: submitit_local
 
 # environment
-task: dog-run
+task: cheetah-run
 obs: state
 episodic: false
 
@@ -12,7 +12,7 @@ eval_episodes: 10
 eval_freq: 50000
 
 # training
-steps: 10_000_000
+steps: 100_000
 batch_size: 256
 reward_coef: 0.1
 value_coef: 0.1
@@ -27,8 +27,9 @@ discount_denom: 5
 discount_min: 0.95
 discount_max: 0.995
 buffer_size: 1_000_000
-exp_name: default
+exp_name: no_sg
 data_dir: ???
+encoder_grad_next_z: true
 
 # planning
 mpc: true
@@ -67,7 +68,7 @@ simnorm_dim: 8
 wandb_project: ???
 wandb_entity: ???
 wandb_silent: false
-enable_wandb: true
+enable_wandb: false
 save_csv: true
 
 # misc

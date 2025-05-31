@@ -30,7 +30,9 @@ pip install \
 export MUJOCO_GL=egl
 export PYOPENGL_PLATFORM=egl
 
-#test run
-python train.py task=cheetah-run ++enable_wandb=false
+# test run, the cheetah can run after 100000 steps
+python train.py task=cheetah-run steps=100000
 
 
+# evaluate the mode, checkout the videos under ./tdmpc2/logs/cheetah-run/1/default/videos
+python evaluate.py task=cheetah-run checkpoint=./tdmpc2/logs/cheetah-run/1/default/models/final.pt save_video=true
