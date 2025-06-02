@@ -262,7 +262,7 @@ class TDMPC2(torch.nn.Module):
 		self.model.train()
 		
 		# Compute targets
-		if self.cfg.no_JEPA_sg or self.cfg.encoder_grad_next_z: #backward compatible with old encoder_grad_next_z
+		if self.cfg.no_JEPA_sg:
 			# Encode next_z with gradients enabled
 			next_z = self.model.encode(obs[1:], task)
 			with torch.no_grad():
