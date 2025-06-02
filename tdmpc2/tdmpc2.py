@@ -326,7 +326,7 @@ class TDMPC2(torch.nn.Module):
 			self.cfg.reward_coef * reward_loss +
 			self.cfg.termination_coef * termination_loss +
 			self.cfg.value_coef * value_loss +
-			pi_loss  # Add policy loss to total
+			self.cfg.pi_coef * pi_loss  # Add policy loss to total
 		)
 
 		# Single backward pass for all losses
