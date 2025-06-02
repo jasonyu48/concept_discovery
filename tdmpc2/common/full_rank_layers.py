@@ -20,7 +20,7 @@ class LULinear(nn.Module):
         else:
             self.L_params = nn.Parameter(torch.randn(out_features, out_features) / (out_features**0.5))
 
-        # U_params stores both the square‐core columns and any “extra” columns:
+        # U_params stores both the square‐core columns and any "extra" columns:
         self.U_params   = nn.Parameter(torch.randn(k, in_features) / (in_features**0.5))
         self.U_diag_raw = nn.Parameter(torch.randn(k))  # unconstrained
 
@@ -72,6 +72,14 @@ class LULinear(nn.Module):
 
         out = F.linear(x, W, self.bias)
         return F.leaky_relu(out, self.negative_slope) if self.activate else out
+
+    def __repr__(self):
+        activation_str = f"LeakyReLU(negative_slope={self.negative_slope})" if self.activate else "None"
+        return f"LULinear(in_features={self.in_features}, "\
+            f"out_features={self.out_features}, "\
+            f"bias={self.bias is not None}, "\
+            f"delta={self.delta}, "\
+            f"activate={activation_str})"
 
 
 
