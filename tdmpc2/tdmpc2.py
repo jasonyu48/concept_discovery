@@ -323,7 +323,7 @@ class TDMPC2(torch.nn.Module):
 		pi_loss = (-(self.cfg.entropy_coef * info_pi["scaled_entropy"] + qs_pi).mean(dim=(1,2)) * rho).mean()
 		
 		# check if the condition (Exist) holds
-		if (self.cfg.exist_check_freq and step % self.cfg.exist_check_freq == 0):
+		if (self.cfg.exist_check_freq and (step+1) % self.cfg.exist_check_freq == 0):
             # pick one 'advantaged' state and ~32 'others' from the batch
 			batch_states = obs[0]                # shape (B, …)
 			if batch_states.size(0) > 1:         # need at least 2 states
@@ -338,7 +338,7 @@ class TDMPC2(torch.nn.Module):
 					tol=self.cfg.exist_tol,
 					device=self.device
 				)
-				print(f"Exist condition holds: {ok}, sigma_min: {sigma}")
+				print(f"Exist condition holds: {ok}, sigma_min: {sigma:.0e}")
 
 		# Combine all losses
 		total_loss = (

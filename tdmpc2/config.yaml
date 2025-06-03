@@ -69,8 +69,8 @@ dropout: 0.01
 simnorm: false
 simnorm_dim: 8
 
-exist_check_freq: 3
-exist_tol: 1e-8
+exist_check_freq: 2500
+exist_tol: 1e-7
 
 # logging
 wandb_project: ???
