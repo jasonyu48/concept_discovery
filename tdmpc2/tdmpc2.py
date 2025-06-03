@@ -7,6 +7,8 @@ from common.world_model import WorldModel
 from common.layers import api_model_conversion
 from tensordict import TensorDict
 
+from exist_check import exist_condition_holds
+
 
 class TDMPC2(torch.nn.Module):
 	"""
@@ -257,7 +259,7 @@ class TDMPC2(torch.nn.Module):
 		discount = self.discount[task].unsqueeze(-1) if self.cfg.multitask else self.discount
 		return reward + discount * (1-terminated) * self.model.Q(next_z, action, task, return_type='min', target=True)
 
-	def _update(self, obs, action, reward, terminated, task=None):
+	def _update(self, obs, action, reward, terminated, task=None, step=None):
 		# Prepare for update
 		self.model.train()
 		
@@ -320,6 +322,24 @@ class TDMPC2(torch.nn.Module):
 		rho = torch.pow(self.cfg.rho, torch.arange(len(qs_pi), device=self.device))
 		pi_loss = (-(self.cfg.entropy_coef * info_pi["scaled_entropy"] + qs_pi).mean(dim=(1,2)) * rho).mean()
 		
+		# check if the condition (Exist) holds
+		if (self.cfg.exist_check_freq and step % self.cfg.exist_check_freq == 0):
+            # pick one 'advantaged' state and ~32 'others' from the batch
+			batch_states = obs[0]                # shape (B, …)
+			if batch_states.size(0) > 1:         # need at least 2 states
+				print("Checking if the condition (Exist) holds...")
+				s_a = batch_states[0]
+				other_states = batch_states[1 : 33]   # up to 32 "others"
+
+				ok, sigma = exist_condition_holds(
+					encoder=self.model._encoder[self.cfg.obs],   # <-- pass the specific encoder for the observation type
+					s_a=s_a,
+					other_obs=other_states,
+					tol=self.cfg.exist_tol,
+					device=self.device
+				)
+				print(f"Exist condition holds: {ok}, sigma_min: {sigma}")
+
 		# Combine all losses
 		total_loss = (
 			self.cfg.consistency_coef * consistency_loss +
@@ -364,7 +384,7 @@ class TDMPC2(torch.nn.Module):
 			info.update(math.termination_statistics(torch.sigmoid(termination_pred[-1]), terminated[-1]))
 		return info.detach().mean()
 
-	def update(self, buffer):
+	def update(self, buffer, step):
 		"""
 		Main update function. Corresponds to one iteration of model learning.
 
@@ -379,4 +399,4 @@ class TDMPC2(torch.nn.Module):
 		if task is not None:
 			kwargs["task"] = task
 		torch.compiler.cudagraph_mark_step_begin()
-		return self._update(obs, action, reward, terminated, **kwargs)
+		return self._update(obs, action, reward, terminated, **kwargs, step=step)

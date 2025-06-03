@@ -5,6 +5,8 @@ import torch
 from tensordict.tensordict import TensorDict
 from trainer.base import Trainer
 
+from tqdm import tqdm
+
 
 class OnlineTrainer(Trainer):
 	"""Trainer class for single-task online TD-MPC2 training."""
@@ -115,11 +117,11 @@ class OnlineTrainer(Trainer):
 			if self._step >= self.cfg.seed_steps:
 				if self._step == self.cfg.seed_steps:
 					num_updates = self.cfg.seed_steps
-					print('Pretraining agent on seed data...')
+					for _ in tqdm(range(num_updates), desc='Pretraining agent on seed data...'):
+						_train_metrics = self.agent.update(self.buffer, self._step)
 				else:
 					num_updates = 1
-				for _ in range(num_updates):
-					_train_metrics = self.agent.update(self.buffer)
+					_train_metrics = self.agent.update(self.buffer, self._step)
 				train_metrics.update(_train_metrics)
 
 			self._step += 1

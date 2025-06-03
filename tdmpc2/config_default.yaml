@@ -12,7 +12,7 @@ eval_episodes: 10
 eval_freq: 50000
 
 # training
-steps: 10_000_000
+steps: 500_000
 batch_size: 256
 reward_coef: 0.1
 value_coef: 0.1
@@ -28,7 +28,7 @@ discount_denom: 5
 discount_min: 0.95
 discount_max: 0.995
 buffer_size: 1_000_000
-exp_name: default_rgb_long_no_linear
+exp_name: default_rgb_no_linear_no_simnorm
 data_dir: ???
 no_JEPA_sg: false
 no_grad_from_Q_R: false
@@ -66,7 +66,7 @@ latent_dim: 512
 task_dim: 96
 num_q: 5
 dropout: 0.01
-simnorm: true
+simnorm: false
 simnorm_dim: 8
 
 # logging
@@ -77,7 +77,7 @@ enable_wandb: false
 save_csv: true
 
 # misc
-compile: true
+compile: false
 save_video: true
 save_agent: true
 seed: 1

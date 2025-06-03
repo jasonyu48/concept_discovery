@@ -28,7 +28,7 @@ discount_denom: 5
 discount_min: 0.95
 discount_max: 0.995
 buffer_size: 1_000_000
-exp_name: grad_from_policy_011_full_rank_rgb_no_linear_no_simnorm
+exp_name: grad_from_policy_011_full_rank_rgb_no_linear_no_simnorm_exist_check
 data_dir: ???
 no_JEPA_sg: true
 no_grad_from_Q_R: true
@@ -69,6 +69,9 @@ dropout: 0.01
 simnorm: false
 simnorm_dim: 8
 
+exist_check_freq: 3
+exist_tol: 1e-8
+
 # logging
 wandb_project: ???
 wandb_entity: ???
@@ -77,7 +80,7 @@ enable_wandb: false
 save_csv: true
 
 # misc
-compile: true
+compile: false
 save_video: true
 save_agent: true
 seed: 1
