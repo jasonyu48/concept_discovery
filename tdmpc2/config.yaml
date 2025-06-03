@@ -12,15 +12,15 @@ eval_episodes: 10
 eval_freq: 25000
 
 # training
-steps: 100_000
+steps: 500_000
 batch_size: 256
 reward_coef: 0.1
 value_coef: 0.1
 termination_coef: 1
 consistency_coef: 20
-pi_coef: 1
+pi_coef: 0.11
 rho: 0.5
-lr: 2e-4 #was 3e-4
+lr: 3e-4 #was 3e-4
 enc_lr_scale: 0.3
 grad_clip_norm: 100
 tau: 0.01
@@ -28,7 +28,7 @@ discount_denom: 5
 discount_min: 0.95
 discount_max: 0.995
 buffer_size: 1_000_000
-exp_name: grad_from_policy_1_full_rank_rgb
+exp_name: grad_from_policy_011_full_rank_rgb_no_linear_no_simnorm
 data_dir: ???
 no_JEPA_sg: true
 no_grad_from_Q_R: true
@@ -66,7 +66,7 @@ latent_dim: 512
 task_dim: 96
 num_q: 5
 dropout: 0.01
-simnorm: true
+simnorm: false
 simnorm_dim: 8
 
 # logging

@@ -149,7 +149,7 @@ def conv(in_shape, num_channels, latent_dim, act=None):
 		nn.Conv2d(num_channels, num_channels, 5, stride=2), nn.ReLU(inplace=False),
 		nn.Conv2d(num_channels, num_channels, 3, stride=2), nn.ReLU(inplace=False),
 		nn.Conv2d(num_channels, num_channels, 3, stride=1), nn.Flatten(),
-		nn.Linear(conv_output_size, latent_dim)  # Project to latent_dim
+		# nn.Linear(conv_output_size, latent_dim)  # Project to latent_dim
 	]
 	if act:
 		layers.append(act)
