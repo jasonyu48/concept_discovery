@@ -70,7 +70,7 @@ simnorm: false
 simnorm_dim: 8
 
 exist_check_freq: 2500
-exist_tol: 1e-7
+exist_tol: 1e-5
 
 # logging
 wandb_project: ???
