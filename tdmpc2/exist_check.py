@@ -148,3 +148,26 @@ def exist_condition_holds(
     B = J_sa(V).T                                             # d×k
     sigma_min = torch.linalg.svdvals(B).min().item()
     return sigma_min > tol, sigma_min
+
+# calculate the average distance between encoding vectors
+def encoding_space_size(encoder: torch.nn.Module, obs: torch.Tensor, device: str = "cuda"):
+    encoder = encoder.to(device)
+    obs = obs.to(device)
+    
+    # Get encoding vectors
+    with torch.no_grad():
+        encodings = encoder(obs)  # N x d (N observations, d encoding dimensions)
+    
+    # Calculate pairwise distances efficiently using matrix operations
+    # ||e_i - e_j||^2 = ||e_i||^2 + ||e_j||^2 - 2*e_i·e_j
+    avg_distance = _mean_pairwise_distance(encodings)
+    
+    return avg_distance.item()
+
+def _mean_pairwise_distance(X):
+    G = X @ X.T
+    s = G.diag()
+    D2 = s[:, None] + s[None, :] - 2 * G
+    vals = D2.triu(diagonal=1)          # upper-triangle, diag excluded
+    vals = vals[vals != 0]              # flatten & drop zeros
+    return vals.sqrt().mean()

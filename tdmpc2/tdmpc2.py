@@ -7,7 +7,7 @@ from common.world_model import WorldModel
 from common.layers import api_model_conversion
 from tensordict import TensorDict
 
-from exist_check import exist_condition_holds
+from exist_check import exist_condition_holds, encoding_space_size
 
 
 class TDMPC2(torch.nn.Module):
@@ -338,7 +338,9 @@ class TDMPC2(torch.nn.Module):
 					tol=self.cfg.exist_tol,
 					device=self.device
 				)
-				print(f"Exist condition holds: {ok}, sigma_min: {sigma:.0e}")
+				print(f"Exist condition holds: {ok}, sigma_min: {sigma:.3e}")
+				encoding_space_s = encoding_space_size(self.model._encoder[self.cfg.obs], batch_states)
+				print(f"Encoding space size: {encoding_space_s:.3e}")
 
 		# Combine all losses
 		total_loss = (
