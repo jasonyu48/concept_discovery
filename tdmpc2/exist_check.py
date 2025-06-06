@@ -3,7 +3,8 @@
 # Check if the null space of A is mapped to a d-dimensional space by J_s_a, where d is the dimension of the encoding space.
 # This is the condition (Exist).
 import math, torch
-from functorch import make_functional, vmap
+from functorch import make_functional
+from torch import vmap
 from torch.func import jvp, vjp
 # ================================================================
 # 1.  functional-encoder cache

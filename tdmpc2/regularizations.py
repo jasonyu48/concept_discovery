@@ -10,7 +10,7 @@ import math
 from typing import Tuple, List, Union
 
 import torch
-from torch.func import vmap
+from torch import vmap
 from torch.func import functional_call
 
 # Re-use the Jacobian ops implemented in exist_check
@@ -65,7 +65,7 @@ def orthogonality_regularization(
     observations: torch.Tensor,
     *,
     num_pairs: int = 8,
-    hutchinson_samples: int = 8,
+    hutchinson_samples: int = 1,
     device: str = "cuda",
     latent_dim: int = 512,
 ) -> torch.Tensor:
