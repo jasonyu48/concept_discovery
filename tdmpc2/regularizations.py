@@ -76,7 +76,7 @@ def orthogonality_regularization(
     observations = observations.to(device)
     B = observations.shape[0]
     if B < 2:                                           # need at least one pair
-        return observations.new_zeros(())
+        return torch.zeros((), device=device, dtype=torch.float32)
 
     # ------------------------------------------------------------------
     # Parameter bookkeeping
@@ -96,7 +96,7 @@ def orthogonality_regularization(
     # ------------------------------------------------------------------
     #  Main computation
     # ------------------------------------------------------------------
-    reg_val = observations.new_zeros(())
+    reg_val = torch.zeros((), device=device, dtype=torch.float32)
     pairs = _choose_pairs(B, num_pairs)
 
     for i, j in pairs:

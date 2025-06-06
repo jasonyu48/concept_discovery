@@ -8,7 +8,7 @@ from common.layers import api_model_conversion
 from tensordict import TensorDict
 
 from exist_check import exist_condition_holds, encoding_space_size
-
+from regularizations import orthogonality_regularization, full_rank_regularization
 
 class TDMPC2(torch.nn.Module):
 	"""
@@ -339,8 +339,17 @@ class TDMPC2(torch.nn.Module):
 					device=self.device
 				)
 				print(f"Exist condition holds: {ok}, sigma_min: {sigma:.3e}")
-				encoding_space_s = encoding_space_size(self.model._encoder[self.cfg.obs], batch_states)
-				print(f"Encoding space size: {encoding_space_s:.3e}")
+				# encoding_space_s = encoding_space_size(self.model._encoder[self.cfg.obs], batch_states)
+				# print(f"Encoding space size: {encoding_space_s:.3e}")
+
+		if self.cfg.ortho_reg:
+			# check the dtype of obs[0]
+			# print(f"Obs[0] dtype: {obs[0].dtype}") torch.uint8
+			ortho_loss = orthogonality_regularization(
+				self.model._encoder[self.cfg.obs], obs[0], device=self.device, latent_dim=self.cfg.latent_dim
+			)
+			if self.cfg.exist_check_freq and (step+1) % self.cfg.exist_check_freq == 0:
+				print(f"Orthogonality loss: {ortho_loss.item():.6e}")
 
 		# Combine all losses
 		total_loss = (
@@ -350,6 +359,9 @@ class TDMPC2(torch.nn.Module):
 			self.cfg.value_coef * value_loss +
 			self.cfg.pi_coef * pi_loss  # Add policy loss to total
 		)
+
+		if self.cfg.ortho_reg:
+			total_loss = total_loss + self.cfg.ortho_reg_coef * ortho_loss
 
 		# Single backward pass for all losses
 		total_loss.backward()
