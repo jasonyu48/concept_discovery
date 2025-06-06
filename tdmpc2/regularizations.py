@@ -53,7 +53,7 @@ def orthogonality_regularization(
     observations: torch.Tensor,
     *,
     num_pairs: int = 8,
-    hutchinson_samples: int = 1,
+    hutchinson_samples: int = 64,
     device: Union[str, torch.device] = "cuda",
     latent_dim: int = 512,
 ) -> torch.Tensor:
@@ -130,21 +130,28 @@ def orthogonality_regularization(
             j = i + 1 + k
             pairs.append((i, j))
 
-    # Hutchinson estimator for each pair
+    # Hutchinson estimator (vectorised over all probes)
     for i, j in pairs:
-        Jv_i, _ = J_ops[i]
-        _, JT_j = J_ops[j]
+        Jv_i, _  = J_ops[i]   #  J(x_i) · v   :  (B?,P) → (B?, d)
+        _, JT_j  = J_ops[j]   #  J(x_j)^T · v :  (B?,d) → (B?, P)
 
-        pair_estimate = 0.0
-        for _ in range(hutchinson_samples):
-            z = torch.randint(0, 2, (latent_dim,), device=device, dtype=torch.float32) * 2 - 1  # Rademacher ±1
-            z = z.unsqueeze(0)  # (1,d)
-            # t = J_j^T z
-            t = JT_j(z)              # (1,P)
-            # s = J_i t
-            s = Jv_i(t)              # (1,d)
-            pair_estimate += (s * s).sum()  # ||M z||^2
-        reg_val = reg_val + pair_estimate / hutchinson_samples
+        # [h, d] Rademacher matrix  (h = hutchinson_samples)
+        Z = torch.randint(
+                0, 2, (hutchinson_samples, latent_dim),
+                device=device, dtype=torch.float32
+            ).mul_(2).sub_(1)        # ±1
+
+        # t = J(x_j)^T Z   ->  [h, P]
+        T = JT_j(Z)
+
+        # s = J(x_i) T     ->  [h, d]
+        S = Jv_i(T)
+
+        # Frobenius-norm square estimate for this pair
+        #   (sum over both probe and latent dimensions)
+        pair_estimate = S.pow(2).sum() / hutchinson_samples
+        reg_val += pair_estimate
+
 
     if len(pairs) > 0:
         reg_val = reg_val / len(pairs)
@@ -162,13 +169,11 @@ def full_rank_regularization(
     observations: torch.Tensor,
     *,
     epsilon: float = 1e-4,
-    activation_margin: float = 10.0,
+    activation_margin: float = 5.0,
     device: Union[str, torch.device] = "cuda",
     latent_dim: int = 512,
 ) -> torch.Tensor:
-    """Compute the negative log-det regularisation term.
-
-    R_full = max(0,  −log det(J_i J_i^T + ε I) − margin).
+    """Compute the log-det regularisation term.
     The determinant is computed exactly by constructing the d×d Gram matrix via
     Jacobian-vector products; d is assumed to be 512.
 
@@ -223,17 +228,17 @@ def full_rank_regularization(
     JJt_stable = JJt_batch + epsilon_eye
 
     # Compute log determinants for all matrices at once
-    #signs, logdets = torch.linalg.slogdet(JJt_stable)  # Both shape (B,)
+    signs, logdets = torch.linalg.slogdet(JJt_stable)  # Both shape (B,)
 
-    dets = torch.linalg.det(JJt_stable)
-    abs_dets = torch.abs(dets)
+    # dets = torch.linalg.det(JJt_stable)
+    # abs_dets = torch.abs(dets)
 
     # Apply ReLU activation and compute mean loss
-    losses = torch.relu(activation_margin - abs_dets)  # (B,)
+    losses = torch.relu(activation_margin - logdets)  # (B,)
     total_loss = losses.mean()
 
     # end_time = time.time()
     # print(f"Full-row-rank regularization time: {end_time - start_time} seconds")
     # compute the absolute value of the determinant of the Jacobian at each observation by e^logdet
-    # abs_det = torch.exp(logdets)
+    abs_dets = torch.exp(torch.clamp(logdets, max=20))
     return total_loss, abs_dets

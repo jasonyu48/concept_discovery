@@ -4,28 +4,25 @@ import torch.nn as nn
 import torch.nn.functional as F
 from torch.utils.data import DataLoader
 from torchvision import datasets, transforms
-from functorch import jacrev
-import matplotlib.pyplot as plt
-import numpy as np
-import time
 
 # Import our regularizations
 from regularizations import orthogonality_regularization, full_rank_regularization
 
+
 # ----------------------------------------------------------------------
 # 1. Hyper-parameters
 # ----------------------------------------------------------------------
-in_dim = 28 * 28          # MNIST flattened
-encoder_dim = 256         # Output dimension for encoder (required by regularizations)
-hidden_dims = [128]  # Hidden layers
-num_classes = 10          # MNIST classes
-batch_size = 64           # Smaller batch for efficiency with regularizations
-lr = 1e-3
-device = "cuda" if torch.cuda.is_available() else "cpu"
+in_dim        = 28 * 28            # MNIST flattened
+encoder_dim   = 256                # Encoder output dimension
+hidden_dims   = [128, 128]         # Hidden layers
+num_classes   = 10                 # MNIST classes
+batch_size    = 64                 # Smaller batch for efficiency
+lr            = 1e-3
+device        = "cuda" if torch.cuda.is_available() else "cpu"
 
 # Regularization weights
-ortho_weight = 0.01       # Weight for orthogonality regularization
-rank_weight = 0.01        # Weight for full-rank regularization
+ortho_weight  = 1.0
+rank_weight   = 0.01
 
 print(f"Using device: {device}")
 
@@ -34,33 +31,30 @@ print(f"Using device: {device}")
 # ----------------------------------------------------------------------
 class EncoderClassifier(nn.Module):
     """
-    A model with an encoder that outputs 512-D features,
+    A model with an encoder that outputs `encoder_dim`-D features,
     followed by a classifier head.
     """
     def __init__(self, in_dim, encoder_dim, hidden_dims, num_classes):
         super().__init__()
-        
-        # Encoder: input -> 512-D features
+
+        # Encoder
         encoder_layers = []
         dims = [in_dim] + hidden_dims + [encoder_dim]
-        
         for i in range(len(dims) - 1):
             encoder_layers.append(nn.Linear(dims[i], dims[i + 1]))
-            if i < len(dims) - 2:  # No activation on last encoder layer
+            if i < len(dims) - 2:           # no activation on last layer
                 encoder_layers.append(nn.ReLU())
-        
         self.encoder = nn.Sequential(*encoder_layers)
-        
-        # Classifier: 512-D features -> num_classes
+
+        # Classifier head
         self.classifier = nn.Linear(encoder_dim, num_classes)
-    
+
     def forward(self, x):
         features = self.encoder(x)
-        logits = self.classifier(features)
+        logits   = self.classifier(features)
         return logits
-    
+
     def encode(self, x):
-        """Get encoded features only"""
         return self.encoder(x)
 
 # ----------------------------------------------------------------------
@@ -68,150 +62,139 @@ class EncoderClassifier(nn.Module):
 # ----------------------------------------------------------------------
 transform = transforms.Compose([
     transforms.ToTensor(),
-    transforms.Lambda(lambda x: x.view(-1))  # flatten
+    transforms.Lambda(lambda t: t.view(-1))  # flatten to vector
 ])
 
-train_set = datasets.MNIST(root=".", train=True, download=True, transform=transform)
-test_set = datasets.MNIST(root=".", train=False, download=True, transform=transform)
+train_set = datasets.MNIST(root=".", train=True,  download=True, transform=transform)
+test_set  = datasets.MNIST(root=".", train=False, download=True, transform=transform)
 
-train_loader = DataLoader(train_set, batch_size=batch_size, shuffle=True, num_workers=2)
-test_loader = DataLoader(test_set, batch_size=batch_size, shuffle=False, num_workers=2)
+train_loader = DataLoader(train_set, batch_size=batch_size, shuffle=True,  num_workers=2)
+test_loader  = DataLoader(test_set,  batch_size=batch_size, shuffle=False, num_workers=2)
 
 # ----------------------------------------------------------------------
-# 5. Training with and without regularizations
+# 4. Utility: global L2-norm of a list of tensors
+# ----------------------------------------------------------------------
+def global_grad_norm(grads):
+    """Return (∑‖g‖₂²)^{1/2}; treat None as zero."""
+    total = torch.tensor(0.0, device=device)
+    for g in grads:
+        if g is not None:
+            total += g.norm() ** 2
+    return total.sqrt().item()
+
+# ----------------------------------------------------------------------
+# 5. Training function
 # ----------------------------------------------------------------------
 def train_model(use_ortho=True, use_rank=True, epochs=10):
-    """Train model with or without regularizations"""
-    
     model = EncoderClassifier(in_dim, encoder_dim, hidden_dims, num_classes).to(device)
     optimizer = torch.optim.Adam(model.parameters(), lr=lr)
-    
-    train_losses = []
-    train_accs = []
-    ortho_vals = []
-    rank_vals = []
-       
+
     for epoch in range(epochs):
+        print(f"\nEpoch {epoch + 1}/{epochs}")
         model.train()
-        total_loss = 0.0
-        total_correct = 0
-        total_samples = 0
-        epoch_ortho = 0.0
-        epoch_rank = 0.0
-        
+
+        total_loss, total_correct, total_samples = 0.0, 0, 0
+        epoch_ortho, epoch_rank, ortho_count, rank_count = 0.0, 0.0, 0, 0
+
         for batch_idx, (x, y) in enumerate(train_loader):
             x, y = x.to(device), y.to(device)
-            
-            # Forward pass
-            logits = model(x)
-            ce_loss = F.cross_entropy(logits, y)
-            
-            # Compute regularization losses
+            logits    = model(x)
+            ce_loss   = F.cross_entropy(logits, y)
+
+            # Regularisation losses
             if use_ortho:
-                # Compute with gradients for optimization
                 ortho_loss = orthogonality_regularization(
-                    model.encoder, x, 
-                    num_pairs=4, hutchinson_samples=1, device=device, latent_dim=encoder_dim
+                    model.encoder, x, device=device, latent_dim=encoder_dim
                 )
+                ortho_count += 1
             else:
-                if batch_idx % 200 == 0:
-                    # Compute without gradients for monitoring only
-                    with torch.no_grad():
-                        ortho_loss = orthogonality_regularization(
-                            model.encoder, x, 
-                            num_pairs=4, hutchinson_samples=1, device=device, latent_dim=encoder_dim
-                        )
-                else:
-                    ortho_loss = torch.tensor(0.0, device=device)
+                ortho_loss = torch.tensor(0.0, device=device)
 
             if use_rank:
-                # Compute with gradients for optimization
                 rank_loss, abs_dets = full_rank_regularization(
                     model.encoder, x,
-                    epsilon=1e-4, activation_margin=10.0, device=device, latent_dim=encoder_dim
+                    epsilon=1e-4, activation_margin=5.0,
+                    device=device, latent_dim=encoder_dim
                 )
+                rank_count += 1
             else:
-                if batch_idx % 200 == 0:
-                    # Compute without gradients for monitoring only
-                    with torch.no_grad():
-                        rank_loss, abs_dets = full_rank_regularization(
-                            model.encoder, x,
-                            epsilon=1e-4, activation_margin=10.0, device=device, latent_dim=encoder_dim
-                        )
-                else:
-                    rank_loss = torch.tensor(0.0, device=device)
-                    abs_dets = torch.tensor(0.0, device=device)
+                rank_loss  = torch.tensor(0.0, device=device)
 
+            # ----------------------------------------------------------
+            # Gradient norms of *individual* losses (before they mix)
+            # ----------------------------------------------------------
+            ce_grads = torch.autograd.grad(
+                ce_loss, model.parameters(), retain_graph=True, allow_unused=True
+            )
+            ce_grad_norm = global_grad_norm(ce_grads)
 
-            abs_det = abs_dets.mean()
-            
-            # Total loss
+            if use_ortho:
+                ortho_grads = torch.autograd.grad(
+                    ortho_loss, model.parameters(), retain_graph=True, allow_unused=True
+                )
+                ortho_grad_norm = global_grad_norm(ortho_grads)
+            else:
+                ortho_grad_norm = 0.0
+
+            # (Optional) rank gradient norm if you want to monitor it
+            if use_rank:
+                rank_grads = torch.autograd.grad(
+                    rank_loss, model.parameters(), retain_graph=True, allow_unused=True
+                )
+                rank_grad_norm = global_grad_norm(rank_grads)
+            else:
+                rank_grad_norm = 0.0
+
+            # ----------------------------------------------------------
+            # Combine losses and back-prop
+            # ----------------------------------------------------------
             total_loss_tensor = ce_loss
             if use_ortho:
                 total_loss_tensor += ortho_weight * ortho_loss
             if use_rank:
-                total_loss_tensor += rank_weight * rank_loss
-            
-            # Backward pass
-            
+                total_loss_tensor += rank_weight  * rank_loss
+
+            optimizer.zero_grad()
             total_loss_tensor.backward()
             optimizer.step()
-            optimizer.zero_grad()
-            
-            # Statistics
-            total_loss += total_loss_tensor.item()
-            pred = logits.argmax(dim=1)
-            total_correct += (pred == y).sum().item()
-            total_samples += y.size(0)
-            
-            epoch_ortho += ortho_loss.item()
-            epoch_rank += rank_loss.item()
-            
+
+            # ----------------------------------------------------------
+            # Logging every 200 batches
+            # ----------------------------------------------------------
             if batch_idx % 200 == 0:
-                # Compute and print the ortho loss and determinant
-                print(f"    Batch {batch_idx}:")
-                print(f"      Ortho loss: {ortho_loss.item():.6f} {'(used)' if use_ortho else '(not used)'}")
-                print(f"      Rank loss: {rank_loss.item():.6f}, Determinant (mean): {abs_det.item():.6f} {'(used)' if use_rank else '(not used)'}")
-        
-        # Compute epoch statistics
-        avg_loss = total_loss / len(train_loader)
-        train_acc = (total_correct / total_samples) * 100
-        avg_ortho = epoch_ortho / len(train_loader)
-        avg_rank = epoch_rank / len(train_loader)
-        
-        train_losses.append(avg_loss)
-        train_accs.append(train_acc)
-        ortho_vals.append(avg_ortho)
-        rank_vals.append(avg_rank)
-        
-        print(f"\nEpoch {epoch+1}/{epochs}:")
-        print(f"  Train Loss: {avg_loss:.4f}, Train Acc: {train_acc:.2f}%")
-        print(f"  Avg Ortho: {avg_ortho:.6f}, Avg Rank: {avg_rank:.6f}")
-            
-    return model, train_losses, train_accs, ortho_vals, rank_vals
+                print(f"  Batch {batch_idx:4d}: "
+                      f"CE={ce_loss.item():.4f}  "
+                      f"Ortho={ortho_loss.item():.4f}  "
+                      f"Rank={rank_loss.item():.4f}\n"
+                      f"             Grad-norms  |  "
+                      f"CE={ce_grad_norm:.3e}  "
+                      f"Ortho={ortho_grad_norm:.3e}  "
+                      f"Rank={rank_grad_norm:.3e}")
+
+            # Statistics
+            total_loss  += total_loss_tensor.item()
+            total_correct += (logits.argmax(1) == y).sum().item()
+            total_samples += y.size(0)
+            epoch_ortho += ortho_loss.item()
+            epoch_rank  += rank_loss.item()
+
+        avg_loss  = total_loss / len(train_loader)
+        train_acc = 100.0 * total_correct / total_samples
+        avg_ortho = epoch_ortho / max(1, ortho_count)
+        avg_rank  = epoch_rank  / max(1, rank_count)
+
+        print(f"  ➤ epoch avg: loss={avg_loss:.4f}  acc={train_acc:.2f}%  "
+              f"ortho={avg_ortho:.4f}  rank={avg_rank:.4f}")
+
+    return model
 
 # ----------------------------------------------------------------------
 # 6. Main experiment
 # ----------------------------------------------------------------------
 if __name__ == "__main__":
 
-    # Train without regularizations
-    print("Training baseline model (no regularizations)...")
-    model_baseline, losses_base, accs_base, ortho_base, rank_base = train_model(
-        use_ortho=False, use_rank=False, epochs=8
-    )
+    print("\nTraining model WITH orthogonality regularisation...")
+    model_ortho = train_model(use_ortho=True,  use_rank=False, epochs=8)
 
-        # Train with regularizations  
-    print("\nTraining model with regularizations...")
-    model_reg, losses_reg, accs_reg, ortho_reg, rank_reg = train_model(
-        use_ortho=True, use_rank=True, epochs=8
-    )
-    
-    
-    # Compare results
-    print(f"\n{'='*60}")
-    print("COMPARISON")
-    print(f"{'='*60}")
-    print(f"Final training accuracy:")
-    print(f"  Baseline: {accs_base[-1]:.2f}%")
-    print(f"  Regularized: {accs_reg[-1]:.2f}%")
+    print("\nTraining BASELINE model (no regularisation)...")
+    model_base  = train_model(use_ortho=False, use_rank=False, epochs=8)
