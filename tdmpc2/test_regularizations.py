@@ -110,15 +110,16 @@ def train_model(use_ortho=True, use_rank=True, epochs=10):
             else:
                 ortho_loss = torch.tensor(0.0, device=device)
 
-            if use_rank:
-                rank_loss, abs_dets = full_rank_regularization(
-                    model.encoder, x,
-                    epsilon=1e-4, activation_margin=5.0,
-                    device=device, latent_dim=encoder_dim
-                )
-                rank_count += 1
-            else:
-                rank_loss  = torch.tensor(0.0, device=device)
+            # if use_rank:
+            #     rank_loss, abs_dets = full_rank_regularization(
+            #         model.encoder, x,
+            #         epsilon=1e-4, activation_margin=5.0,
+            #         device=device, latent_dim=encoder_dim
+            #     )
+            #     rank_count += 1
+            # else:
+            #     rank_loss  = torch.tensor(0.0, device=device)
+            rank_loss = torch.tensor(0.0, device=device)
 
             # ----------------------------------------------------------
             # Gradient norms of *individual* losses (before they mix)
@@ -136,23 +137,14 @@ def train_model(use_ortho=True, use_rank=True, epochs=10):
             else:
                 ortho_grad_norm = 0.0
 
-            # (Optional) rank gradient norm if you want to monitor it
-            if use_rank:
-                rank_grads = torch.autograd.grad(
-                    rank_loss, model.parameters(), retain_graph=True, allow_unused=True
-                )
-                rank_grad_norm = global_grad_norm(rank_grads)
-            else:
-                rank_grad_norm = 0.0
-
             # ----------------------------------------------------------
             # Combine losses and back-prop
             # ----------------------------------------------------------
             total_loss_tensor = ce_loss
             if use_ortho:
                 total_loss_tensor += ortho_weight * ortho_loss
-            if use_rank:
-                total_loss_tensor += rank_weight  * rank_loss
+            # if use_rank:
+            #     total_loss_tensor += rank_weight  * rank_loss
 
             optimizer.zero_grad()
             total_loss_tensor.backward()
@@ -162,14 +154,19 @@ def train_model(use_ortho=True, use_rank=True, epochs=10):
             # Logging every 200 batches
             # ----------------------------------------------------------
             if batch_idx % 200 == 0:
+                with torch.no_grad():
+                    _, abs_det = full_rank_regularization(
+                        model.encoder, x,
+                        epsilon=1e-4, activation_margin=5.0,
+                        device=device, latent_dim=encoder_dim
+                    )
                 print(f"  Batch {batch_idx:4d}: "
                       f"CE={ce_loss.item():.4f}  "
                       f"Ortho={ortho_loss.item():.4f}  "
-                      f"Rank={rank_loss.item():.4f}\n"
+                      f"det={abs_det.item():.4f}\n"
                       f"             Grad-norms  |  "
                       f"CE={ce_grad_norm:.3e}  "
-                      f"Ortho={ortho_grad_norm:.3e}  "
-                      f"Rank={rank_grad_norm:.3e}")
+                      f"Ortho={ortho_grad_norm:.3e}")
 
             # Statistics
             total_loss  += total_loss_tensor.item()

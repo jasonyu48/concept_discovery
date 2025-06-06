@@ -215,5 +215,5 @@ def full_rank_regularization(
     # end_time = time.time()
     # print(f"Full-row-rank regularization time: {end_time - start_time} seconds")
     # compute the absolute value of the determinant of the Jacobian at each observation by e^logdet
-    abs_dets = torch.exp(torch.clamp(logdets, max=20))
-    return total_loss, abs_dets
+    abs_det = torch.exp(torch.clamp(logdets, max=20)).mean()
+    return total_loss, abs_det
