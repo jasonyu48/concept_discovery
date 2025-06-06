@@ -21,7 +21,7 @@ lr            = 1e-3
 device        = "cuda" if torch.cuda.is_available() else "cpu"
 
 # Regularization weights
-ortho_weight  = 1.0
+ortho_weight  = 0.01
 rank_weight   = 0.01
 
 print(f"Using device: {device}")
