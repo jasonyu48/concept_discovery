@@ -9,22 +9,22 @@ episodic: false
 # evaluation
 checkpoint: ???
 eval_episodes: 10
-eval_freq: 10000
+eval_freq: 25000
 
 # training
-steps: 100_000
+steps: 350_000
 batch_size: 256
 reward_coef: 0.1
 value_coef: 0.1
 termination_coef: 1
 consistency_coef: 20
-pi_coef: 20
+pi_coef: 0.11
 ortho_reg_coef: 0.05
-ortho_reg: true
-full_rank_reg: true
+ortho_reg: false
+full_rank_reg: false
 full_rank_reg_coef: 0.05
 rho: 0.5
-lr: 1e-4 #was 3e-4
+lr: 3e-4 #was 3e-4
 enc_lr_scale: 0.3
 grad_clip_norm: 200
 tau: 0.01
@@ -32,11 +32,11 @@ discount_denom: 5
 discount_min: 0.95
 discount_max: 0.995
 buffer_size: 1_000_000
-exp_name: grad_from_policy_20_full_rank_rgb_no_linear_no_simnorm_FR2
+exp_name: grad_from_Q_R_011_full_rank_rgb_no_linear_no_simnorm_seed2015
 data_dir: ???
 no_JEPA_sg: true
-no_grad_from_Q_R: true
-grad_from_policy: true
+no_grad_from_Q_R: false
+grad_from_policy: false
 
 # planning
 mpc: true
@@ -87,7 +87,7 @@ save_csv: true
 compile: false
 save_video: true
 save_agent: true
-seed: 1
+seed: 2015
 
 # convenience
 work_dir: ???
