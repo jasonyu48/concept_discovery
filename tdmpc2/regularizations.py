@@ -42,7 +42,7 @@ def orthogonality_regularization(
     encoder: torch.nn.Module,
     observations: torch.Tensor,
     *,
-    num_pairs: int = 4,
+    num_pairs: int = 8,
     hutchinson_samples: int = 1,
     device: str = "cuda",
     latent_dim: int = 512,
@@ -174,7 +174,7 @@ def full_rank_regularization(
     observations: torch.Tensor,
     *,
     latent_dim: int,
-    num_samples: int = 8,
+    num_samples: int = 16,
     epsilon: float = 1e-4,
     activation_margin: float = 5.0,
     # Implementation switch ------------------------------------------------

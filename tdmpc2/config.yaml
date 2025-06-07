@@ -9,10 +9,10 @@ episodic: false
 # evaluation
 checkpoint: ???
 eval_episodes: 10
-eval_freq: 25000
+eval_freq: 10000
 
 # training
-steps: 250_000
+steps: 100_000
 batch_size: 256
 reward_coef: 0.1
 value_coef: 0.1
@@ -20,8 +20,8 @@ termination_coef: 1
 consistency_coef: 20
 pi_coef: 20
 ortho_reg_coef: 0.05
-ortho_reg: false
-full_rank_reg: false
+ortho_reg: true
+full_rank_reg: true
 full_rank_reg_coef: 0.05
 rho: 0.5
 lr: 1e-4 #was 3e-4
@@ -32,10 +32,10 @@ discount_denom: 5
 discount_min: 0.95
 discount_max: 0.995
 buffer_size: 1_000_000
-exp_name: grad_from_policy_QR_20_full_rank_rgb_no_linear_no_simnorm
+exp_name: grad_from_policy_20_full_rank_rgb_no_linear_no_simnorm_FR2
 data_dir: ???
 no_JEPA_sg: true
-no_grad_from_Q_R: false
+no_grad_from_Q_R: true
 grad_from_policy: true
 
 # planning
