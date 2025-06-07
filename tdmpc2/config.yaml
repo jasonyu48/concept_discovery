@@ -21,6 +21,8 @@ consistency_coef: 20
 pi_coef: 0.11
 ortho_reg_coef: 0.1
 ortho_reg: true
+full_rank_reg: true
+full_rank_reg_coef: 0.1
 rho: 0.5
 lr: 3e-4 #was 3e-4
 enc_lr_scale: 0.3
@@ -30,7 +32,7 @@ discount_denom: 5
 discount_min: 0.95
 discount_max: 0.995
 buffer_size: 1_000_000
-exp_name: grad_from_policy_011_full_rank_rgb_no_linear_no_simnorm_ORTHO
+exp_name: grad_from_policy_011_full_rank_rgb_no_linear_no_simnorm_FR
 data_dir: ???
 no_JEPA_sg: true
 no_grad_from_Q_R: true

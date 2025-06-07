@@ -351,6 +351,13 @@ class TDMPC2(torch.nn.Module):
 			if self.cfg.exist_check_freq and (step+1) % self.cfg.exist_check_freq == 0:
 				print(f"Orthogonality loss: {ortho_loss.item():.6e}")
 
+		if self.cfg.full_rank_reg:
+			fr_loss, abs_det = full_rank_regularization(
+				self.model._encoder[self.cfg.obs], obs[0], device=self.device, latent_dim=self.cfg.latent_dim
+			)
+			if self.cfg.exist_check_freq and (step+1) % self.cfg.exist_check_freq == 0:
+				print(f"Full rank loss: {abs_det.item():.6e}")
+
 		# Combine all losses
 		total_loss = (
 			self.cfg.consistency_coef * consistency_loss +
@@ -362,6 +369,8 @@ class TDMPC2(torch.nn.Module):
 
 		if self.cfg.ortho_reg:
 			total_loss = total_loss + self.cfg.ortho_reg_coef * ortho_loss
+		if self.cfg.full_rank_reg:
+			total_loss = total_loss + self.cfg.full_rank_reg_coef * fr_loss
 
 		# Single backward pass for all losses
 		total_loss.backward()

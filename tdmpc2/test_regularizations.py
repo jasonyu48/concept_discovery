@@ -113,6 +113,7 @@ def train_model(use_ortho=True, use_rank=True, epochs=10):
             if use_rank:
                 rank_loss, abs_dets = full_rank_regularization(
                     model.encoder, x,
+                    latent_dim=encoder_dim,
                     epsilon=1e-4, activation_margin=5.0,
                     device=device
                 )
@@ -165,6 +166,7 @@ def train_model(use_ortho=True, use_rank=True, epochs=10):
                 with torch.no_grad():
                     _, abs_det = full_rank_regularization(
                         model.encoder, x,
+                        latent_dim=encoder_dim,
                         epsilon=1e-4, activation_margin=5.0,
                         device=device
                     )

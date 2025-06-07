@@ -117,12 +117,69 @@ def orthogonality_regularization(
 # 2. Full-row-rank regularization
 # ----------------------------------------------------------------------------
 
+def _lanczos(Av_fn, dim: int, k: int, v0: torch.Tensor):
+    """Classic Lanczos tridiagonalisation.
+
+    Args:
+        Av_fn: callable that returns A @ v (shape (dim,)). Should create graph for autograd.
+        dim:   dimension of A (latent dimension).
+        k:     number of Lanczos iterations (<= dim).
+        v0:    initial vector (shape (dim,)). Must be non-zero.
+
+    Returns:
+        Q  – (dim, m) orthonormal basis (m ≤ k).
+        T  – (m, m) symmetric tridiagonal matrix s.t.  A ≈ Q T Qᵀ  in Krylov space.
+    """
+    k = min(k, dim)
+    q = v0 / (v0.norm() + 1e-12)
+    Q_cols = []
+    alphas, betas = [], []
+    beta_prev = torch.tensor(0.0, dtype=q.dtype, device=q.device)
+    q_prev = torch.zeros_like(q)
+
+    for j in range(k):
+        Q_cols.append(q)
+
+        # A @ q
+        z = Av_fn(q)
+
+        alpha = torch.dot(q, z)
+        alphas.append(alpha)
+
+        # Orthogonalise against previous basis vector
+        z = z - alpha * q - beta_prev * q_prev
+
+        beta = z.norm()
+        if j == k - 1 or beta.item() == 0.0:
+            break
+
+        betas.append(beta)
+        q_prev = q
+        q = z / beta
+        beta_prev = beta
+
+    m = len(alphas)
+    T = torch.zeros((m, m), dtype=v0.dtype, device=v0.device)
+    for i in range(m):
+        T[i, i] = alphas[i]
+        if i < m - 1:
+            T[i, i + 1] = betas[i]
+            T[i + 1, i] = betas[i]
+
+    Q = torch.stack(Q_cols, dim=1)  # (dim, m)
+    return Q, T
+
 def full_rank_regularization(
     encoder: torch.nn.Module,
     observations: torch.Tensor,
     *,
+    latent_dim: int,
+    num_samples: int = 4,
     epsilon: float = 1e-4,
     activation_margin: float = 5.0,
+    approximate: bool = True,
+    num_probe: int = 1,
+    num_lanczos: int = 10,
     device: str = "cuda",
 ) -> Tuple[torch.Tensor, torch.Tensor]:
     """
@@ -136,6 +193,14 @@ def full_rank_regularization(
     observations = observations.to(device)
     B            = observations.size(0)
 
+    # --------------------------------------------------------------
+    # Optionally subsample observations to reduce compute cost
+    # --------------------------------------------------------------
+    if num_samples is None or num_samples >= B:
+        sample_ids = torch.arange(B, device=device)
+    else:
+        sample_ids = torch.randperm(B, device=device)[:num_samples]
+
     # ------------------------------------------------------------------
     # Parameter bookkeeping
     # ------------------------------------------------------------------
@@ -143,8 +208,7 @@ def full_rank_regularization(
                           if p.requires_grad])
     params = tuple(params)                              # single tuple
 
-    latent_dim = encoder(observations[:1]).size(1)
-    eye_d      = torch.eye(latent_dim, device=device)
+    eye_d = torch.eye(latent_dim, device=device)
 
     # helper: run encoder(x) with explicit parameter tuple -------------------
     def enc_with(ps: Tuple[torch.Tensor, ...], x: torch.Tensor) -> torch.Tensor:
@@ -157,44 +221,86 @@ def full_rank_regularization(
     logdets: List[torch.Tensor] = []
 
     # ------------------------------------------------------------------
-    # Loop over the batch (no vmap needed)
+    # Loop over selected observations
     # ------------------------------------------------------------------
-    for idx in range(B):
-        x = observations[idx : idx + 1]                 # keep batch dim
+    for idx in sample_ids.tolist():
+        x = observations[idx : idx + 1]  # keep batch dim
 
-        cols = []
-        for k in range(latent_dim):
-            e_k = eye_d[k : k + 1]                      # (1, d) Rademacher basis
+        if approximate:
+            # ---------------- Hutchinson-Lanczos estimate ----------------
 
-            # ----- reverse-mode:  t = Jᵀ e_k ---------------------------
-            _, pullback = torch.autograd.functional.vjp(
-                lambda *ps: enc_with(ps, x),            # func(*ps)
-                params,                                 # ONE positional input
-                v=e_k,
-                create_graph=True,
-            )
-            t_tuple = pullback                          # tuple, same structure
+            def Av(v: torch.Tensor) -> torch.Tensor:
+                """Return (J Jᵀ + εI) v without materialising J."""
+                # Reverse-mode: t = Jᵀ v
+                _, t_tuple = torch.autograd.functional.vjp(
+                    lambda *ps: enc_with(ps, x),
+                    params,
+                    v=v.unsqueeze(0),  # add batch dim
+                    create_graph=True,
+                )
+                # Forward-mode: J t
+                _, s = torch.autograd.functional.jvp(
+                    lambda *ps: enc_with(ps, x),
+                    params,
+                    t_tuple,
+                    create_graph=True,
+                )
+                s = s.squeeze(0)  # (d,)
+                return s + epsilon * v
 
-            # ----- forward-mode:  col_k = J t --------------------------
-            _, col = torch.autograd.functional.jvp(
-                lambda *ps: enc_with(ps, x),
-                params,                                 # primals
-                t_tuple,                                # tangents
-                create_graph=True,
-            )                       # col shape (1, d)
+            ld_est = 0.0
+            for _ in range(num_probe):
+                z = torch.randint(0, 2, (latent_dim,), device=device, dtype=torch.float32)
+                z = z.mul(2).sub(1)  # ±1 Rademacher
 
-            cols.append(col.squeeze(0))                 # (d,)
+                # Lanczos tridiagonalisation on the fly
+                _, T = _lanczos(Av, latent_dim, num_lanczos, z)
 
-        # Gram matrix G = J Jᵀ and its stabilised version
-        G     = torch.stack(cols, dim=1)                # (d, d)
-        G_eps = G + epsilon * eye_d
-        _, ld = torch.linalg.slogdet(G_eps)             # scalar log-det
+                # Eigenvalues of small tri-diagonal matrix
+                evals = torch.linalg.eigvalsh(T)
+
+                # Prevent log(0)
+                evals = evals.clamp(min=1e-12)
+
+                ld_est = ld_est + (z @ z) * torch.log(evals).mean()
+
+            ld = ld_est / num_probe
+
+        else:
+            # ---------------- Exact logdet via explicit Gram -------------
+            cols = []
+            for k in range(latent_dim):
+                e_k = eye_d[k : k + 1]  # (1, d) basis vector
+
+                # Reverse-mode: t = Jᵀ e_k
+                _, pullback = torch.autograd.functional.vjp(
+                    lambda *ps: enc_with(ps, x),
+                    params,
+                    v=e_k,
+                    create_graph=True,
+                )
+                t_tuple = pullback
+
+                # Forward-mode: J t
+                _, col = torch.autograd.functional.jvp(
+                    lambda *ps: enc_with(ps, x),
+                    params,
+                    t_tuple,
+                    create_graph=True,
+                )
+                cols.append(col.squeeze(0))
+
+            G = torch.stack(cols, dim=1)  # (d, d)
+            G_eps = G + epsilon * eye_d
+            _, ld = torch.linalg.slogdet(G_eps)
+
         logdets.append(ld)
 
-    logdets = torch.stack(logdets)                      # (B,)
+    logdets = torch.stack(logdets)  # (|sample_ids|,)
 
     # Regularisation loss
     loss = torch.relu(activation_margin - logdets).mean()
+    # loss = logdets.mean()
 
     # For monitoring: mean |det| (clamped)
     abs_det = torch.exp(torch.clamp(logdets, max=20)).mean()
