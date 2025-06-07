@@ -6,8 +6,7 @@
 # J_j is the Jacobian at observation j != i
 # R_full = -log det(J_iJ_i^T + epsilon I) It should not be active when the determinant is already large
 
-import math
-from typing import Tuple, List, Union
+from typing import Tuple, List
 
 import torch
 from torch import vmap
@@ -25,27 +24,6 @@ __all__ = [
     "orthogonality_regularization",
     "full_rank_regularization",
 ]
-
-# ----------------------------------------------------------------------------
-# Helper utilities
-# ----------------------------------------------------------------------------
-
-def _prepare_encoder(encoder: torch.nn.Module, device: torch.device):
-    """Return functional encoder + flattened params + shapes, moved to device."""
-    encoder = encoder.to(device)
-    fmodel, flat_params, shapes = _get_functional_encoder(encoder)
-    return fmodel, flat_params, shapes
-
-
-def _construct_J_ops(
-    fmodel,
-    flat_params: torch.Tensor,
-    shapes: List[torch.Size],
-    obs: torch.Tensor,
-):
-    """Convenience wrapper around `_make_J_ops`."""
-    return _make_J_ops(fmodel, flat_params, shapes, obs.unsqueeze(0))
-
 
 # ----------------------------------------------------------------------
 #  Orthogonality regulariser
@@ -145,75 +123,79 @@ def full_rank_regularization(
     *,
     epsilon: float = 1e-4,
     activation_margin: float = 5.0,
-    device: Union[str, torch.device] = "cuda",
-    latent_dim: int = 512,
-) -> torch.Tensor:
-    """Compute the log-det regularisation term.
-    The determinant is computed exactly by constructing the d×d Gram matrix via
-    Jacobian-vector products; d is assumed to be 512.
-
-    Parameters
-    ----------
-    encoder : torch.nn.Module
-        Encoder network.
-    observations : torch.Tensor
-        A batch of observations (B, *).
-    epsilon : float, default 1e-4
-        Positive constant added to the diagonal for numerical stability.
-    activation_margin : float, default 0
-        Optional margin: when −logdet < margin the loss is clamped to 0. Setting
-        a positive margin makes the regularisation active only when logdet is
-        sufficiently small.
-    device : str or torch.device, default "cuda"
-        Device for computation.
-
-    Returns
-    -------
-    torch.Tensor
-        Scalar loss (requires grad).
+    device: str = "cuda",
+) -> Tuple[torch.Tensor, torch.Tensor]:
     """
-    # start_time = time.time()
-    if observations.ndim == 0:
-        raise ValueError("`observations` must be a batch, not a single tensor.")
+    R_rank  =  mean_s ReLU(margin − log det(J_s J_sᵀ + ε I))
 
-    device = torch.device(device)
+    • No functorch transforms that re-enter autograd (no vmap/grad).  
+    • Uses autograd.functional.{vjp,jvp} with create_graph=True.  
+    • Gradient flows to encoder.parameters().
+    """
+    device       = torch.device(device)
     observations = observations.to(device)
+    B            = observations.size(0)
 
-    fmodel, flat_params, shapes = _prepare_encoder(encoder, device)
+    # ------------------------------------------------------------------
+    # Parameter bookkeeping
+    # ------------------------------------------------------------------
+    names, params = zip(*[(n, p) for n, p in encoder.named_parameters()
+                          if p.requires_grad])
+    params = tuple(params)                              # single tuple
 
-    B = observations.size(0)
-    I_eye = torch.eye(latent_dim, device=device)
+    latent_dim = encoder(observations[:1]).size(1)
+    eye_d      = torch.eye(latent_dim, device=device)
 
-    # Compute Jacobians for all observations at once using vmap
-    def single_jacobian_ops(obs):
-        """Compute J @ I for a single observation"""
-        Jv, JT = _construct_J_ops(fmodel, flat_params, shapes, obs)
-        # Compute JT(I) -> (latent_dim, P)
-        JT_I = JT(I_eye)
-        # Compute J(JT(I)) -> (latent_dim, latent_dim) which is J J^T
-        JJt = Jv(JT_I)
-        return JJt
+    # helper: run encoder(x) with explicit parameter tuple -------------------
+    def enc_with(ps: Tuple[torch.Tensor, ...], x: torch.Tensor) -> torch.Tensor:
+        return functional_call(
+            encoder,
+            {k: v for k, v in zip(names, ps)},
+            (x,),
+        )                                               # (1, d)
 
-    # Use vmap to compute all Jacobian Gram matrices at once
-    # Shape: (B, latent_dim, latent_dim)
-    JJt_batch = vmap(single_jacobian_ops)(observations)
+    logdets: List[torch.Tensor] = []
 
-    # Add epsilon regularization to all matrices at once
-    epsilon_eye = epsilon * I_eye.unsqueeze(0).expand(B, -1, -1)  # (B, latent_dim, latent_dim)
-    JJt_stable = JJt_batch + epsilon_eye
+    # ------------------------------------------------------------------
+    # Loop over the batch (no vmap needed)
+    # ------------------------------------------------------------------
+    for idx in range(B):
+        x = observations[idx : idx + 1]                 # keep batch dim
 
-    # Compute log determinants for all matrices at once
-    signs, logdets = torch.linalg.slogdet(JJt_stable)  # Both shape (B,)
+        cols = []
+        for k in range(latent_dim):
+            e_k = eye_d[k : k + 1]                      # (1, d) Rademacher basis
 
-    # dets = torch.linalg.det(JJt_stable)
-    # abs_dets = torch.abs(dets)
+            # ----- reverse-mode:  t = Jᵀ e_k ---------------------------
+            _, pullback = torch.autograd.functional.vjp(
+                lambda *ps: enc_with(ps, x),            # func(*ps)
+                params,                                 # ONE positional input
+                v=e_k,
+                create_graph=True,
+            )
+            t_tuple = pullback                          # tuple, same structure
 
-    # Apply ReLU activation and compute mean loss
-    losses = torch.relu(activation_margin - logdets)  # (B,)
-    total_loss = losses.mean()
+            # ----- forward-mode:  col_k = J t --------------------------
+            _, col = torch.autograd.functional.jvp(
+                lambda *ps: enc_with(ps, x),
+                params,                                 # primals
+                t_tuple,                                # tangents
+                create_graph=True,
+            )                       # col shape (1, d)
 
-    # end_time = time.time()
-    # print(f"Full-row-rank regularization time: {end_time - start_time} seconds")
-    # compute the absolute value of the determinant of the Jacobian at each observation by e^logdet
+            cols.append(col.squeeze(0))                 # (d,)
+
+        # Gram matrix G = J Jᵀ and its stabilised version
+        G     = torch.stack(cols, dim=1)                # (d, d)
+        G_eps = G + epsilon * eye_d
+        _, ld = torch.linalg.slogdet(G_eps)             # scalar log-det
+        logdets.append(ld)
+
+    logdets = torch.stack(logdets)                      # (B,)
+
+    # Regularisation loss
+    loss = torch.relu(activation_margin - logdets).mean()
+
+    # For monitoring: mean |det| (clamped)
     abs_det = torch.exp(torch.clamp(logdets, max=20)).mean()
-    return total_loss, abs_det
+    return loss, abs_det

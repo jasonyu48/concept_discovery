@@ -19,7 +19,7 @@ value_coef: 0.1
 termination_coef: 1
 consistency_coef: 20
 pi_coef: 0.11
-ortho_reg_coef: 0.005
+ortho_reg_coef: 0.1
 ortho_reg: true
 rho: 0.5
 lr: 3e-4 #was 3e-4
@@ -71,7 +71,7 @@ dropout: 0.01
 simnorm: false
 simnorm_dim: 8
 
-exist_check_freq: 2500
+exist_check_freq: 2000
 exist_tol: 1e-5
 
 # logging
