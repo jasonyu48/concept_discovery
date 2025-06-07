@@ -42,7 +42,7 @@ def orthogonality_regularization(
     encoder: torch.nn.Module,
     observations: torch.Tensor,
     *,
-    num_pairs: int = 8,
+    num_pairs: int = 4,
     hutchinson_samples: int = 1,
     device: str = "cuda",
     latent_dim: int = 512,
@@ -174,10 +174,13 @@ def full_rank_regularization(
     observations: torch.Tensor,
     *,
     latent_dim: int,
-    num_samples: int = 4,
+    num_samples: int = 8,
     epsilon: float = 1e-4,
     activation_margin: float = 5.0,
-    approximate: bool = True,
+    # Implementation switch ------------------------------------------------
+    row_orthogonal: bool = True,           # NEW: very cheap surrogate using row-orthogonality
+    approximate: bool = True,              # used only if row_orthogonal is False
+    # ---------------------------------------------------------------------
     num_probe: int = 1,
     num_lanczos: int = 10,
     device: str = "cuda",
@@ -221,8 +224,54 @@ def full_rank_regularization(
     logdets: List[torch.Tensor] = []
 
     # ------------------------------------------------------------------
-    # Loop over selected observations
+    # Option 1: fast row-orthonormality surrogate  ----------------------
     # ------------------------------------------------------------------
+    if row_orthogonal:
+        hutchinson_samples = num_probe  # reuse same arg semantics
+        loss_accum = 0.0
+
+        for idx in sample_ids.tolist():
+            x = observations[idx : idx + 1]
+
+            obs_accum = 0.0
+            for _ in range(hutchinson_samples):
+                # Rademacher probe with encoder output shape (1, d)
+                z = torch.randint(0, 2, (1, latent_dim), device=device, dtype=torch.float32)
+                z = z.mul_(2).sub_(1)
+
+                # Compute G z = J Jᵀ z   via one VJP + one JVP
+                _, t_tuple = torch.autograd.functional.vjp(
+                    lambda *ps: enc_with(ps, x),
+                    params,
+                    v=z,
+                    create_graph=True,
+                )
+
+                _, s = torch.autograd.functional.jvp(
+                    lambda *ps: enc_with(ps, x),
+                    params,
+                    t_tuple,
+                    create_graph=True,
+                )  # s shape (1, d)
+
+                # Residual (G - am*I) z
+                delta = s - activation_margin * z
+
+                obs_accum = obs_accum + delta.pow(2).sum()
+
+            loss_accum = loss_accum + obs_accum / hutchinson_samples
+
+        # Average over sampled observations
+        loss = loss_accum / sample_ids.numel()
+
+        # In this surrogate we don't compute |det|; reuse loss for monitoring
+        abs_det = loss.detach()
+        return loss, abs_det
+
+    # ------------------------------------------------------------------
+    # Option 2: log-det based methods (exact or Hutchinson-Lanczos) ------
+    # ------------------------------------------------------------------
+
     for idx in sample_ids.tolist():
         x = observations[idx : idx + 1]  # keep batch dim
 
