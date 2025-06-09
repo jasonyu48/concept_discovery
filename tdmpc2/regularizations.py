@@ -51,7 +51,7 @@ def orthogonality_regularization(
     Estimate  R_orth = E_{i≠j} || J(x_i) J(x_j)ᵀ ||_F²
     with Hutchinson probes, fully differentiable w.r.t. encoder params.
     """
-    observations = observations.to(device)
+    observations = observations.to(device).float()  # Convert uint8 to float for gradient computation
     B = observations.shape[0]
     if B < 2:                                           # need at least one pair
         return torch.zeros((), device=device, dtype=torch.float32)
@@ -193,7 +193,7 @@ def full_rank_regularization(
     • Gradient flows to encoder.parameters().
     """
     device       = torch.device(device)
-    observations = observations.to(device)
+    observations = observations.to(device).float()  # Convert uint8 to float for gradient computation
     B            = observations.size(0)
 
     # --------------------------------------------------------------

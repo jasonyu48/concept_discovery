@@ -9,6 +9,7 @@ from tensordict import TensorDict
 
 from exist_check import exist_condition_holds, encoding_space_size
 from regularizations import orthogonality_regularization, full_rank_regularization
+from collapse_monitor import CollapseMonitor
 
 class TDMPC2(torch.nn.Module):
 	"""
@@ -44,6 +45,9 @@ class TDMPC2(torch.nn.Module):
 		if cfg.compile:
 			print('Compiling update function with torch.compile...')
 			self._update = torch.compile(self._update, mode="reduce-overhead")
+		
+		# Initialize collapse monitor
+		self.collapse_monitor = None  # Will be set by trainer after env is available
 
 	@property
 	def plan(self):
@@ -422,4 +426,17 @@ class TDMPC2(torch.nn.Module):
 		if task is not None:
 			kwargs["task"] = task
 		torch.compiler.cudagraph_mark_step_begin()
-		return self._update(obs, action, reward, terminated, **kwargs, step=step)
+		
+		# Run main update
+		update_info = self._update(obs, action, reward, terminated, **kwargs, step=step)
+		
+		# Monitor encoder collapse if available
+		if self.collapse_monitor is not None:
+			collapse_metrics = self.collapse_monitor.monitor_step(step)
+			if collapse_metrics:  # Only add if monitoring was performed
+				update_info.update({
+					f"collapse_{k}": v for k, v in collapse_metrics.items()
+					if k not in ['step']  # Avoid duplicate step info
+				})
+		
+		return update_info

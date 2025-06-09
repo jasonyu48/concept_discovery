@@ -35,8 +35,8 @@ buffer_size: 1_000_000
 exp_name: grad_from_Q_R_011_full_rank_rgb_no_linear_no_simnorm_seed2015
 data_dir: ???
 no_JEPA_sg: true
-no_grad_from_Q_R: false
-grad_from_policy: false
+no_grad_from_Q_R: true
+grad_from_policy: true
 
 # planning
 mpc: true

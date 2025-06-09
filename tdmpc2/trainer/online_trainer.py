@@ -4,8 +4,8 @@ import numpy as np
 import torch
 from tensordict.tensordict import TensorDict
 from trainer.base import Trainer
-
 from tqdm import tqdm
+from collapse_monitor import CollapseMonitor
 
 
 class OnlineTrainer(Trainer):
@@ -75,6 +75,24 @@ class OnlineTrainer(Trainer):
 
 	def train(self):
 		"""Train a TD-MPC2 agent."""
+		
+		# Initialize collapse monitor after env is available
+		if not hasattr(self.agent, 'collapse_monitor') or self.agent.collapse_monitor is None:
+			print("🔍 Initializing encoder collapse monitor...")
+			try:
+				self.agent.collapse_monitor = CollapseMonitor(
+					cfg=self.cfg,
+					encoder=self.agent.model._encoder[self.cfg.obs],
+					env=self.env,
+					device=str(self.agent.device),
+					save_dir=f"collapse_logs_{self.cfg.exp_name}"
+				)
+				print("✅ Collapse monitor initialized successfully!")
+			except Exception as e:
+				print(f"⚠️ Failed to initialize collapse monitor: {e}")
+				print("   Continuing training without collapse monitoring...")
+				self.agent.collapse_monitor = None
+		
 		train_metrics, done, eval_next = {}, True, False
 		while self._step <= self.cfg.steps:
 			# Evaluate agent periodically
@@ -125,5 +143,25 @@ class OnlineTrainer(Trainer):
 				train_metrics.update(_train_metrics)
 
 			self._step += 1
+
+		# Generate final collapse monitoring report
+		if hasattr(self.agent, 'collapse_monitor') and self.agent.collapse_monitor is not None:
+			print("\n" + "="*60)
+			print("📊 FINAL ENCODER COLLAPSE ANALYSIS")
+			print("="*60)
+			try:
+				# Generate final monitoring plots
+				self.agent.collapse_monitor.plot_monitoring_results(save_plot=True)
+				
+				# Print final report
+				report = self.agent.collapse_monitor.generate_report()
+				print(report)
+				
+				# Save final monitoring data
+				self.agent.collapse_monitor.save_monitoring_data()
+				
+			except Exception as e:
+				print(f"⚠️ Error generating final collapse report: {e}")
+			print("="*60)
 
 		self.logger.finish(self.agent)
