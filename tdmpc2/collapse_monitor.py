@@ -63,30 +63,66 @@ class CollapseMonitor:
         print(f"   - Save directory: {self.save_dir}")
     
     def _generate_baseline_observations(self):
-        """Generate diverse baseline observations using different seeds"""
-        print("🌱 Generating baseline diverse observations...")
+        """Generate diverse baseline observations using different seeds with consecutive frames"""
+        print("🌱 Generating baseline diverse observations with consecutive frames...")
         
         observations = []
+        observation_frames = []  # Store individual frames for GIF generation
+        
         with torch.no_grad():
-            for seed in self.seeds:
+            for i, seed in enumerate(self.seeds):
                 try:
                     # Reset environment with different seed
                     if hasattr(self.env, 'seed'):
                         self.env.seed(seed)
+                    
+                    # Reset and clear frame buffer to start fresh
                     obs = self.env.reset()
                     if isinstance(obs, tuple):
                         obs = obs[0]  # Handle new gym API
-                    observations.append(obs)
-                except Exception as e:
-                    print(f"⚠️ Warning: Failed to reset with seed {seed}: {e}")
-                    # Fallback: use random action steps
-                    obs = self.env.reset()
-                    if isinstance(obs, tuple):
-                        obs = obs[0]
-                    for _ in range(seed % 10):  # Some randomness
+                    
+                    # Generate 3-5 random actions to get consecutive frames
+                    num_actions = np.random.randint(3, 6)  # Random between 3-5 actions
+                    frame_sequence = []
+                    
+                    for step in range(num_actions):
                         action = self.env.action_space.sample()
                         obs, _, _, _ = self.env.step(action)
+                        
+                        # Store individual frames for visualization (if RGB environment)
+                        if hasattr(self.env, 'render') and step >= num_actions - 3:
+                            try:
+                                frame = self.env.render()
+                                if frame is not None:
+                                    frame_sequence.append(frame)
+                            except:
+                                pass  # Skip if render fails
+                    
+                    # Use the final observation (which contains consecutive 3 frames)
                     observations.append(obs)
+                    observation_frames.append(frame_sequence)
+                    
+                    if (i + 1) % 10 == 0:
+                        print(f"   Generated {i + 1}/{len(self.seeds)} observations...")
+                        
+                except Exception as e:
+                    print(f"⚠️ Warning: Failed to generate consecutive frames with seed {seed}: {e}")
+                    # Fallback: reset and take a few steps
+                    try:
+                        obs = self.env.reset()
+                        if isinstance(obs, tuple):
+                            obs = obs[0]
+                        for _ in range(3):  # Take 3 steps minimum
+                            action = self.env.action_space.sample()
+                            obs, _, _, _ = self.env.step(action)
+                        observations.append(obs)
+                        observation_frames.append([])  # Empty frame sequence for fallback
+                    except Exception as e2:
+                        print(f"❌ Complete failure for seed {seed}: {e2}")
+                        continue
+        
+        # Store frames for potential GIF generation
+        self.observation_frames = observation_frames
         
         # Convert to tensor
         self.baseline_observations = torch.stack([
@@ -94,7 +130,9 @@ class CollapseMonitor:
             for obs in observations
         ]).to(self.device).float()
         
-        print(f" Generated {len(observations)} diverse observations with shape {self.baseline_observations.shape}")
+        print(f"✅ Generated {len(observations)} diverse observations with consecutive frames")
+        print(f"   Final shape: {self.baseline_observations.shape}")
+        print(f"   Each observation contains 3 consecutive frames from random actions")
         
         # Compute initial baseline encodings
         self._update_baseline_encodings()
@@ -361,6 +399,95 @@ Collapse Score: {collapse_score:.4f}/1.0
   • Collapse Score < 0.3: Likely collapsed
 """
         return report
+    
+    def save_observation_gifs(self, max_gifs: int = 10):
+        """Save GIFs of the first few observation sequences for visualization"""
+        if not hasattr(self, 'observation_frames') or not self.observation_frames:
+            print("⚠️ No observation frames available for GIF generation")
+            return
+        
+        print(f"🎬 Saving observation GIFs...")
+        gif_dir = self.save_dir / "observation_gifs"
+        gif_dir.mkdir(exist_ok=True)
+        
+        import imageio
+        
+        saved_gifs = 0
+        for i, frame_sequence in enumerate(self.observation_frames[:max_gifs]):
+            if len(frame_sequence) >= 3:  # Only save if we have enough frames
+                try:
+                    gif_path = gif_dir / f"observation_sequence_{i:03d}_seed_{self.seeds[i]}.gif"
+                    
+                    # Convert frames to proper format for imageio
+                    gif_frames = []
+                    for frame in frame_sequence:
+                        if isinstance(frame, np.ndarray):
+                            # Ensure frame is in uint8 format
+                            if frame.dtype != np.uint8:
+                                frame = (frame * 255).astype(np.uint8) if frame.max() <= 1.0 else frame.astype(np.uint8)
+                            gif_frames.append(frame)
+                    
+                    # Save GIF with slower frame rate for better visualization
+                    imageio.mimsave(gif_path, gif_frames, duration=0.5, loop=0)
+                    saved_gifs += 1
+                    
+                    if saved_gifs == 1:
+                        print(f"   Saved first GIF: {gif_path}")
+                        
+                except Exception as e:
+                    print(f"   Failed to save GIF {i}: {e}")
+        
+        print(f"✅ Saved {saved_gifs} observation GIFs to {gif_dir}")
+        return gif_dir
+    
+    def visualize_frame_differences(self, sequence_idx: int = 0):
+        """Visualize the differences between consecutive frames in a sequence"""
+        if not hasattr(self, 'observation_frames') or not self.observation_frames:
+            print("⚠️ No observation frames available")
+            return None
+            
+        if sequence_idx >= len(self.observation_frames):
+            print(f"⚠️ Sequence {sequence_idx} not available. Max: {len(self.observation_frames)-1}")
+            return None
+            
+        frame_sequence = self.observation_frames[sequence_idx]
+        if len(frame_sequence) < 3:
+            print(f"⚠️ Sequence {sequence_idx} has only {len(frame_sequence)} frames")
+            return None
+        
+        fig, axes = plt.subplots(2, 3, figsize=(15, 10))
+        
+        # Show the 3 consecutive frames
+        for i in range(3):
+            axes[0, i].imshow(frame_sequence[i])
+            axes[0, i].set_title(f'Frame {i+1}')
+            axes[0, i].axis('off')
+        
+        # Show frame differences
+        for i in range(2):
+            diff = np.abs(frame_sequence[i+1].astype(float) - frame_sequence[i].astype(float))
+            diff_normalized = diff / diff.max() if diff.max() > 0 else diff
+            axes[1, i].imshow(diff_normalized, cmap='hot')
+            axes[1, i].set_title(f'Diff {i+1}→{i+2}')
+            axes[1, i].axis('off')
+        
+        # Show combined difference
+        if len(frame_sequence) >= 3:
+            total_diff = np.abs(frame_sequence[2].astype(float) - frame_sequence[0].astype(float))
+            total_diff_normalized = total_diff / total_diff.max() if total_diff.max() > 0 else total_diff
+            axes[1, 2].imshow(total_diff_normalized, cmap='hot')
+            axes[1, 2].set_title('Total Diff 1→3')
+            axes[1, 2].axis('off')
+        
+        plt.suptitle(f'Frame Sequence Analysis - Seed {self.seeds[sequence_idx]}')
+        plt.tight_layout()
+        
+        # Save the visualization
+        vis_path = self.save_dir / f"frame_analysis_seq_{sequence_idx}.png"
+        plt.savefig(vis_path, dpi=150, bbox_inches='tight')
+        print(f"📊 Saved frame analysis to {vis_path}")
+        
+        return fig
 
 # Integration function for easy use in training loop
 def create_collapse_monitor(cfg, encoder, env, save_dir=None) -> CollapseMonitor:

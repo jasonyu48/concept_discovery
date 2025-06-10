@@ -12,7 +12,7 @@ eval_episodes: 10
 eval_freq: 25000
 
 # training
-steps: 350_000
+steps: 50_000
 batch_size: 256
 reward_coef: 0.1
 value_coef: 0.1
@@ -32,11 +32,11 @@ discount_denom: 5
 discount_min: 0.95
 discount_max: 0.995
 buffer_size: 1_000_000
-exp_name: grad_from_Q_R_011_full_rank_rgb_no_linear_no_simnorm_seed2015
+exp_name: GradFromQR_full_rank_rgb_no_linear_no_simnorm_seed64
 data_dir: ???
 no_JEPA_sg: true
-no_grad_from_Q_R: true
-grad_from_policy: true
+no_grad_from_Q_R: false
+grad_from_policy: false
 
 # planning
 mpc: true

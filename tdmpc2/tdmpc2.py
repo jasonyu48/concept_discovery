@@ -46,8 +46,8 @@ class TDMPC2(torch.nn.Module):
 			print('Compiling update function with torch.compile...')
 			self._update = torch.compile(self._update, mode="reduce-overhead")
 		
-		# Initialize collapse monitor
-		self.collapse_monitor = None  # Will be set by trainer after env is available
+		# Initialize encoding space monitor
+		self.encoding_monitor = None  # Will be set by trainer after env is available
 
 	@property
 	def plan(self):
@@ -430,12 +430,12 @@ class TDMPC2(torch.nn.Module):
 		# Run main update
 		update_info = self._update(obs, action, reward, terminated, **kwargs, step=step)
 		
-		# Monitor encoder collapse if available
-		if self.collapse_monitor is not None:
-			collapse_metrics = self.collapse_monitor.monitor_step(step)
-			if collapse_metrics:  # Only add if monitoring was performed
+		# Monitor encoding space if available (simplified)
+		if hasattr(self, 'encoding_monitor') and self.encoding_monitor is not None:
+			encoding_metrics = self.encoding_monitor.monitor_step(step)
+			if encoding_metrics:  # Only add if monitoring was performed
 				update_info.update({
-					f"collapse_{k}": v for k, v in collapse_metrics.items()
+					f"encoding_{k}": v for k, v in encoding_metrics.items()
 					if k not in ['step']  # Avoid duplicate step info
 				})
 		

@@ -6,6 +6,7 @@ from tensordict.tensordict import TensorDict
 from trainer.base import Trainer
 from tqdm import tqdm
 from collapse_monitor import CollapseMonitor
+from simple_encoding_space_monitor import SimpleEncodingSpaceMonitor
 
 
 class OnlineTrainer(Trainer):
@@ -76,22 +77,22 @@ class OnlineTrainer(Trainer):
 	def train(self):
 		"""Train a TD-MPC2 agent."""
 		
-		# Initialize collapse monitor after env is available
-		if not hasattr(self.agent, 'collapse_monitor') or self.agent.collapse_monitor is None:
-			print("🔍 Initializing encoder collapse monitor...")
+		# Initialize simple encoding space monitor after env is available
+		if not hasattr(self.agent, 'encoding_monitor') or self.agent.encoding_monitor is None:
+			print("🔍 Initializing simple encoding space monitor...")
 			try:
-				self.agent.collapse_monitor = CollapseMonitor(
+				self.agent.encoding_monitor = SimpleEncodingSpaceMonitor(
 					cfg=self.cfg,
 					encoder=self.agent.model._encoder[self.cfg.obs],
 					env=self.env,
 					device=str(self.agent.device),
-					save_dir=f"collapse_logs_{self.cfg.exp_name}"
+					save_dir=f"simple_encoding_logs_{self.cfg.exp_name}"
 				)
-				print("✅ Collapse monitor initialized successfully!")
+				print("✅ Simple encoding space monitor initialized successfully!")
 			except Exception as e:
-				print(f"⚠️ Failed to initialize collapse monitor: {e}")
-				print("   Continuing training without collapse monitoring...")
-				self.agent.collapse_monitor = None
+				print(f"⚠️ Failed to initialize encoding space monitor: {e}")
+				print("   Continuing training without encoding space monitoring...")
+				self.agent.encoding_monitor = None
 		
 		train_metrics, done, eval_next = {}, True, False
 		while self._step <= self.cfg.steps:
@@ -144,24 +145,30 @@ class OnlineTrainer(Trainer):
 
 			self._step += 1
 
-		# Generate final collapse monitoring report
-		if hasattr(self.agent, 'collapse_monitor') and self.agent.collapse_monitor is not None:
+		# Generate final simple encoding space monitoring report
+		if hasattr(self.agent, 'encoding_monitor') and self.agent.encoding_monitor is not None:
 			print("\n" + "="*60)
-			print("📊 FINAL ENCODER COLLAPSE ANALYSIS")
+			print(" FINAL SIMPLE ENCODING SPACE ANALYSIS")
 			print("="*60)
 			try:
-				# Generate final monitoring plots
-				self.agent.collapse_monitor.plot_monitoring_results(save_plot=True)
+				# Generate final encoding space plots
+				self.agent.encoding_monitor.plot_encoding_space_curve(save_plot=True)
+				
+				# Generate and save observation GIFs for visualization
+				print("🎬 Generating observation GIFs for visualization...")
+				gif_dir = self.agent.encoding_monitor.save_observation_gifs(max_gifs=5)
+				if gif_dir:
+					print(f"✅ GIFs saved to: {gif_dir}")
 				
 				# Print final report
-				report = self.agent.collapse_monitor.generate_report()
+				report = self.agent.encoding_monitor.generate_simple_report()
 				print(report)
 				
 				# Save final monitoring data
-				self.agent.collapse_monitor.save_monitoring_data()
+				self.agent.encoding_monitor.save_monitoring_data()
 				
 			except Exception as e:
-				print(f"⚠️ Error generating final collapse report: {e}")
+				print(f" Error generating final encoding space report: {e}")
 			print("="*60)
 
 		self.logger.finish(self.agent)
