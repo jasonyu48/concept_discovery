@@ -326,24 +326,24 @@ class TDMPC2(torch.nn.Module):
 		pi_loss = (-(self.cfg.entropy_coef * info_pi["scaled_entropy"] + qs_pi).mean(dim=(1,2)) * rho).mean()
 		
 		# check if the condition (Exist) holds
-		if (self.cfg.exist_check_freq and (step+1) % self.cfg.exist_check_freq == 0):
-            # pick one 'advantaged' state and ~32 'others' from the batch
-			batch_states = obs[0]                # shape (B, …)
-			if batch_states.size(0) > 1:         # need at least 2 states
-				print("Checking if the condition (Exist) holds...")
-				s_a = batch_states[0]
-				other_states = batch_states[1 : 33]   # up to 32 "others"
+		# if (self.cfg.exist_check_freq and (step+1) % self.cfg.exist_check_freq == 0):
+        #     # pick one 'advantaged' state and ~32 'others' from the batch
+		# 	batch_states = obs[0]                # shape (B, …)
+		# 	if batch_states.size(0) > 1:         # need at least 2 states
+		# 		print("Checking if the condition (Exist) holds...")
+		# 		s_a = batch_states[0]
+		# 		other_states = batch_states[1 : 33]   # up to 32 "others"
 
-				ok, sigma = exist_condition_holds(
-					encoder=self.model._encoder[self.cfg.obs],   # <-- pass the specific encoder for the observation type
-					s_a=s_a,
-					other_obs=other_states,
-					tol=self.cfg.exist_tol,
-					device=self.device
-				)
-				print(f"Exist condition holds: {ok}, sigma_min: {sigma:.3e}")
-				# encoding_space_s = encoding_space_size(self.model._encoder[self.cfg.obs], batch_states)
-				# print(f"Encoding space size: {encoding_space_s:.3e}")
+		# 		ok, sigma = exist_condition_holds(
+		# 			encoder=self.model._encoder[self.cfg.obs],   # <-- pass the specific encoder for the observation type
+		# 			s_a=s_a,
+		# 			other_obs=other_states,
+		# 			tol=self.cfg.exist_tol,
+		# 			device=self.device
+		# 		)
+		# 		print(f"Exist condition holds: {ok}, sigma_min: {sigma:.3e}")
+		# 		# encoding_space_s = encoding_space_size(self.model._encoder[self.cfg.obs], batch_states)
+		# 		# print(f"Encoding space size: {encoding_space_s:.3e}")
 
 		if self.cfg.ortho_reg:
 			# check the dtype of obs[0]
@@ -351,14 +351,14 @@ class TDMPC2(torch.nn.Module):
 			ortho_loss = orthogonality_regularization(
 				self.model._encoder[self.cfg.obs], obs[0], device=self.device, latent_dim=self.cfg.latent_dim
 			)
-			if self.cfg.exist_check_freq and (step+1) % self.cfg.exist_check_freq == 0:
+			if self.cfg.monitor_freq and (step+1) % self.cfg.monitor_freq == 0:
 				print(f"Orthogonality loss: {ortho_loss.item():.6e}")
 
 		if self.cfg.full_rank_reg:
 			fr_loss, abs_det = full_rank_regularization(
 				self.model._encoder[self.cfg.obs], obs[0], device=self.device, latent_dim=self.cfg.latent_dim
 			)
-			if self.cfg.exist_check_freq and (step+1) % self.cfg.exist_check_freq == 0:
+			if self.cfg.monitor_freq and (step+1) % self.cfg.monitor_freq == 0:
 				print(f"Full rank loss: {abs_det.item():.6e}")
 
 		# Combine all losses

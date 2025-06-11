@@ -45,7 +45,7 @@ def test_simple_encoding_monitor():
             'task_dim': 96,
             'multitask': False,
             'exp_name': 'test_simple_encoding',
-            'exist_check_freq': 100,  # Check more frequently for testing
+            'monitor_freq': 100,  # Check more frequently for testing
             'num_enc_layers': 2,
             'enc_dim': 256,
             'num_channels': 32,

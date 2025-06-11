@@ -17,17 +17,41 @@ def plot_eval_rewards():
             'marker': '^'
         },
         {
+            'path': '/home/jyu197/tdmpc2/tdmpc2/logs/cheetah-run/2015/default_rgb_no_linear_seed2015/eval.csv',
+            'label': 'tdmpc2(different seed)',
+            'color': 'g',
+            'marker': 's'
+        },
+        {
             'path': './tdmpc2/logs/cheetah-run/1/grad_from_policy_011_full_rank_rgb_no_linear_no_simnorm_size_check/eval.csv',
             'label': 'grad from policy',
             'color': 'r',
-            'marker': 's'
+            'marker': '^'
         },
         {
             'path': './tdmpc2/logs/cheetah-run/1/grad_from_Q_R_011_full_rank_rgb_no_linear_no_simnorm_size_check/eval.csv',
             'label': 'grad from Q R',
             'color': 'b',
+            'marker': '^'
+        },
+        {
+            'path': '/home/jyu197/tdmpc2/tdmpc2/logs/cheetah-run/2015/grad_from_Q_R_011_full_rank_rgb_no_linear_no_simnorm_seed2015/eval.csv',
+            'label': 'grad from Q R (different seed)',
+            'color': 'b',
+            'marker': 's'
+        },
+        {
+            'path': '/home/jyu197/tdmpc2/tdmpc2/logs/cheetah-run/2015/grad_from_Q_R_011_rgb_no_linear_no_simnorm_seed2015/eval.csv',
+            'label': 'grad from Q R no LU',
+            'color': 'b',
             'marker': 'o'
-        }
+        },
+        {
+            'path': '/home/jyu197/tdmpc2/tdmpc2/logs/cheetah-run/2015/grad_from_Q_R_1_full_rank_rgb_no_linear_no_simnorm_seed2015/eval.csv',
+            'label': 'grad from Q R (different seed, grad weight)',
+            'color': 'b',
+            'marker': 'p'
+        },
     ]
     
     # Create the plot
@@ -41,7 +65,7 @@ def plot_eval_rewards():
                 df = pd.read_csv(exp['path'])
                 
                 # Filter for step <= 350000
-                df_filtered = df[df['step'] <= 350000]
+                df_filtered = df[df['step'] <= 3500000]
                 
                 # Plot the data
                 plt.plot(df_filtered['step'], df_filtered['episode_reward'], 
@@ -70,7 +94,7 @@ def plot_eval_rewards():
     plt.gca().xaxis.set_major_formatter(plt.FuncFormatter(lambda x, p: f'{int(x/1000)}K'))
     
     # Set x-axis limit
-    plt.xlim(0, 350000)
+    plt.xlim(0, 3500000)
     
     plt.tight_layout()
     

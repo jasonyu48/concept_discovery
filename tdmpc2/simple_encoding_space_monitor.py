@@ -32,7 +32,7 @@ class SimpleEncodingSpaceMonitor:
         
         # Monitoring configuration
         self.num_seed_obs = 64  # Number of diverse seed observations
-        self.monitor_freq = self.cfg.get('exist_check_freq', 2000)  # Monitor every N steps
+        self.monitor_freq = self.cfg.get('monitor_freq', 2000)  # Monitor every N steps
         self.seeds = list(range(42, 42 + self.num_seed_obs))  # Fixed seeds for reproducibility
         
         # Simple storage for monitoring data
