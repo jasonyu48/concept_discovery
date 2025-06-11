@@ -65,7 +65,7 @@ def plot_eval_rewards():
                 df = pd.read_csv(exp['path'])
                 
                 # Filter for step <= 350000
-                df_filtered = df[df['step'] <= 3500000]
+                df_filtered = df[df['step'] <= 350000]
                 
                 # Plot the data
                 plt.plot(df_filtered['step'], df_filtered['episode_reward'], 
@@ -94,7 +94,7 @@ def plot_eval_rewards():
     plt.gca().xaxis.set_major_formatter(plt.FuncFormatter(lambda x, p: f'{int(x/1000)}K'))
     
     # Set x-axis limit
-    plt.xlim(0, 3500000)
+    plt.xlim(0, 350000)
     
     plt.tight_layout()
     
