@@ -80,6 +80,8 @@ class SimpleEncodingSpaceMonitor:
                     
                     for step in range(num_actions):
                         action = self.env.action_space.sample()
+                        # convert action to tensor
+                        action = torch.tensor(action)
                         obs, _, _, _ = self.env.step(action)
                         
                         # Store individual frames for visualization (if RGB environment)

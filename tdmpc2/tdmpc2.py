@@ -9,7 +9,6 @@ from tensordict import TensorDict
 
 from exist_check import exist_condition_holds, encoding_space_size
 from regularizations import orthogonality_regularization, full_rank_regularization
-from collapse_monitor import CollapseMonitor
 
 class TDMPC2(torch.nn.Module):
 	"""
@@ -263,7 +262,7 @@ class TDMPC2(torch.nn.Module):
 		discount = self.discount[task].unsqueeze(-1) if self.cfg.multitask else self.discount
 		return reward + discount * (1-terminated) * self.model.Q(next_z, action, task, return_type='min', target=True)
 
-	def _update(self, obs, action, reward, terminated, task=None, step=None):
+	def _update(self, obs, action, reward, terminated, task=None, step=None, pretrain_step=-1):
 		# Prepare for update
 		self.model.train()
 		
@@ -409,9 +408,19 @@ class TDMPC2(torch.nn.Module):
 		})
 		if self.cfg.episodic:
 			info.update(math.termination_statistics(torch.sigmoid(termination_pred[-1]), terminated[-1]))
+		
+		# Monitor encoding space if available (simplified)
+		if hasattr(self, 'encoding_monitor') and self.encoding_monitor is not None and pretrain_step < 1:
+			encoding_metrics = self.encoding_monitor.monitor_step(step)
+			if encoding_metrics:  # Only add if monitoring was performed
+				info.update({
+					f"encoding_{k}": v for k, v in encoding_metrics.items()
+					if k not in ['step']  # Avoid duplicate step info
+				})
+		
 		return info.detach().mean()
 
-	def update(self, buffer, step):
+	def update(self, buffer, step, pretrain_step=-1):
 		"""
 		Main update function. Corresponds to one iteration of model learning.
 
@@ -428,15 +437,6 @@ class TDMPC2(torch.nn.Module):
 		torch.compiler.cudagraph_mark_step_begin()
 		
 		# Run main update
-		update_info = self._update(obs, action, reward, terminated, **kwargs, step=step)
-		
-		# Monitor encoding space if available (simplified)
-		if hasattr(self, 'encoding_monitor') and self.encoding_monitor is not None:
-			encoding_metrics = self.encoding_monitor.monitor_step(step)
-			if encoding_metrics:  # Only add if monitoring was performed
-				update_info.update({
-					f"encoding_{k}": v for k, v in encoding_metrics.items()
-					if k not in ['step']  # Avoid duplicate step info
-				})
+		update_info = self._update(obs, action, reward, terminated, **kwargs, step=step, pretrain_step=pretrain_step)
 		
 		return update_info

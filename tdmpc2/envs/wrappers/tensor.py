@@ -35,12 +35,7 @@ class TensorWrapper(gym.Wrapper):
 		return self._obs_to_tensor(self.env.reset())
 
 	def step(self, action):
-		# Convert action to numpy if it's a tensor, otherwise keep as is
-		if isinstance(action, torch.Tensor):
-			action_np = action.numpy()
-		else:
-			action_np = action
-		obs, reward, done, info = self.env.step(action_np)
+		obs, reward, done, info = self.env.step(action.numpy())
 		info = defaultdict(float, info)
 		info['success'] = float(info['success'])
 		info['terminated'] = torch.tensor(float(info['terminated']))

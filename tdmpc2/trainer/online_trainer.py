@@ -5,7 +5,6 @@ import torch
 from tensordict.tensordict import TensorDict
 from trainer.base import Trainer
 from tqdm import tqdm
-from collapse_monitor import CollapseMonitor
 from simple_encoding_space_monitor import SimpleEncodingSpaceMonitor
 
 
@@ -136,8 +135,8 @@ class OnlineTrainer(Trainer):
 			if self._step >= self.cfg.seed_steps:
 				if self._step == self.cfg.seed_steps:
 					num_updates = self.cfg.seed_steps
-					for _ in tqdm(range(num_updates), desc='Pretraining agent on seed data...'):
-						_train_metrics = self.agent.update(self.buffer, self._step)
+					for pretrain_step in tqdm(range(num_updates), desc='Pretraining agent on seed data...'):
+						_train_metrics = self.agent.update(self.buffer, self._step, pretrain_step)
 				else:
 					num_updates = 1
 					_train_metrics = self.agent.update(self.buffer, self._step)
