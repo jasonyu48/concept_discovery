@@ -9,11 +9,7 @@
 from typing import Tuple, List
 
 import torch
-from torch import vmap
 from torch.func import functional_call
-
-# Re-use the Jacobian ops implemented in exist_check
-from exist_check import _get_functional_encoder, _make_J_ops
 
 import time
 

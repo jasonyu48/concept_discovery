@@ -356,7 +356,8 @@ class TDMPC2(torch.nn.Module):
 
 		if self.cfg.full_rank_reg:
 			fr_loss, abs_det = full_rank_regularization(
-				self.model._encoder[self.cfg.obs], obs[0], device=self.device, latent_dim=self.cfg.latent_dim
+				self.model._encoder[self.cfg.obs], obs[0], device=self.device, latent_dim=self.cfg.latent_dim,
+				num_samples=self.cfg.full_rank_reg_num_samples
 			)
 			if self.cfg.monitor_freq and (step+1) % self.cfg.monitor_freq == 0:
 				print(f"Full rank loss: {abs_det.item():.6e}")

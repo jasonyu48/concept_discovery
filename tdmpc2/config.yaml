@@ -1,5 +1,6 @@
 defaults:
     - override hydra/launcher: submitit_local
+    - _self_
 
 # environment
 task: cheetah-run
@@ -12,7 +13,7 @@ eval_episodes: 10
 eval_freq: 25000
 
 # training
-steps: 180_000
+steps: 100_000
 batch_size: 256
 reward_coef: 0.1
 value_coef: 0.1
@@ -23,6 +24,7 @@ ortho_reg_coef: 0.05
 ortho_reg: false
 full_rank_reg: true
 full_rank_reg_coef: 0.05
+full_rank_reg_num_samples: 128  # Number of observation samples for full rank regularization
 rho: 0.5
 lr: 3e-4 #was 3e-4
 enc_lr_scale: 0.3
@@ -32,7 +34,7 @@ discount_denom: 5
 discount_min: 0.95
 discount_max: 0.995
 buffer_size: 1_000_000
-exp_name: GradFromPolicy_full_rank_rgb_no_linear_no_simnorm_fr_reg
+exp_name: GradFromPolicy_full_rank_rgb_no_linear_no_simnorm_fr_reg_strong
 data_dir: ???
 no_JEPA_sg: true
 no_grad_from_Q_R: true
@@ -73,7 +75,7 @@ dropout: 0.01
 simnorm: false
 simnorm_dim: 8
 
-monitor_freq: 2500
+monitor_freq: 5000
 
 exist_tol: 1e-5
 
@@ -103,3 +105,13 @@ action_dims: ???
 episode_lengths: ???
 seed_steps: ???
 bin_size: ???
+
+# Hydra configuration to organize outputs by experiment name
+hydra:
+  job:
+    chdir: false  # Don't change directory automatically
+  run:
+    dir: ./logs/${task}/${seed}/${exp_name}  # Use same structure as work_dir
+  sweep:
+    dir: ./logs/${task}
+    subdir: ${seed}/${exp_name}
