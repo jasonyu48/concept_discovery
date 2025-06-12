@@ -7,7 +7,6 @@ from common.world_model import WorldModel
 from common.layers import api_model_conversion
 from tensordict import TensorDict
 
-from exist_check import exist_condition_holds, encoding_space_size
 from regularizations import orthogonality_regularization, full_rank_regularization
 
 class TDMPC2(torch.nn.Module):

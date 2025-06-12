@@ -1,3 +1,5 @@
+print('this code is obsoleted')
+
 # Stack the Jacobians of the encoding vectors with respect to the parameters of the encoder at 32 observations. Call this matrix A.
 # Call the Jacobian at another observation J_s_a.
 # Check if the null space of A is mapped to a d-dimensional space by J_s_a, where d is the dimension of the encoding space.
