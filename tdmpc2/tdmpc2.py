@@ -345,17 +345,21 @@ class TDMPC2(torch.nn.Module):
 		# 		# print(f"Encoding space size: {encoding_space_s:.3e}")
 
 		if self.cfg.ortho_reg:
-			# check the dtype of obs[0]
-			# print(f"Obs[0] dtype: {obs[0].dtype}") torch.uint8
+			# Concatenate all observations from the sequence to avoid bias toward initial observations
+			# obs shape: (horizon+1, batch_size, ...) -> (batch_size * (horizon+1), ...)
+			all_obs = obs.view(-1, *obs.shape[2:])  # Flatten first two dimensions
 			ortho_loss = orthogonality_regularization(
-				self.model._encoder[self.cfg.obs], obs[0], device=self.device, latent_dim=self.cfg.latent_dim
+				self.model._encoder[self.cfg.obs], all_obs, device=self.device, latent_dim=self.cfg.latent_dim
 			)
 			if self.cfg.monitor_freq and (step+1) % self.cfg.monitor_freq == 0:
 				print(f"Orthogonality loss: {ortho_loss.item():.6e}")
 
 		if self.cfg.full_rank_reg:
+			# Concatenate all observations from the sequence to avoid bias toward initial observations
+			# obs shape: (horizon+1, batch_size, ...) -> (batch_size * (horizon+1), ...)
+			all_obs = obs.view(-1, *obs.shape[2:])  # Flatten first two dimensions
 			fr_loss, abs_det = full_rank_regularization(
-				self.model._encoder[self.cfg.obs], obs[0], device=self.device, latent_dim=self.cfg.latent_dim,
+				self.model._encoder[self.cfg.obs], all_obs, device=self.device, latent_dim=self.cfg.latent_dim,
 				num_samples=self.cfg.full_rank_reg_num_samples
 			)
 			if self.cfg.monitor_freq and (step+1) % self.cfg.monitor_freq == 0:

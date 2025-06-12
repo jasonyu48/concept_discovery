@@ -20,10 +20,10 @@ value_coef: 0.1
 termination_coef: 1
 consistency_coef: 20
 pi_coef: 0.11
-ortho_reg_coef: 0.05
+ortho_reg_coef: 0.005
 ortho_reg: false
 full_rank_reg: true
-full_rank_reg_coef: 0.05
+full_rank_reg_coef: 0.005
 full_rank_reg_num_samples: 128  # Number of observation samples for full rank regularization
 rho: 0.5
 lr: 3e-4 #was 3e-4
@@ -34,11 +34,19 @@ discount_denom: 5
 discount_min: 0.95
 discount_max: 0.995
 buffer_size: 1_000_000
-exp_name: GradFromPolicy_full_rank_rgb_no_linear_no_simnorm_fr_reg_strong
+exp_name: GradFromPolicy_full_rank_rgb_no_linear_no_simnorm2_fr_reg_strong2
 data_dir: ???
 no_JEPA_sg: true
 no_grad_from_Q_R: true
 grad_from_policy: true
+
+# misc
+compile: false
+save_video: true
+save_agent: true
+exist_tol: 1e-5
+seed: 2016
+monitor_freq: 2500
 
 # planning
 mpc: true
@@ -75,22 +83,12 @@ dropout: 0.01
 simnorm: false
 simnorm_dim: 8
 
-monitor_freq: 5000
-
-exist_tol: 1e-5
-
 # logging
 wandb_project: ???
 wandb_entity: ???
 wandb_silent: false
 enable_wandb: false
 save_csv: true
-
-# misc
-compile: false
-save_video: true
-save_agent: true
-seed: 2015
 
 # convenience
 work_dir: ???
