@@ -19,7 +19,7 @@ reward_coef: 0.1
 value_coef: 0.1
 termination_coef: 1
 consistency_coef: 20
-pi_coef: 1.0
+pi_coef: 0.11
 ortho_reg_coef: 0.005
 ortho_reg: false
 full_rank_reg: false
@@ -34,11 +34,11 @@ discount_denom: 5
 discount_min: 0.95
 discount_max: 0.995
 buffer_size: 1_000_000
-exp_name: Default_True
+exp_name: GradFromPolicy_full_rank_rgb_no_linear_no_simnorm
 data_dir: ???
-no_JEPA_sg: false
-no_grad_from_Q_R: false
-grad_from_policy: false
+no_JEPA_sg: true
+no_grad_from_Q_R: true
+grad_from_policy: true
 
 # misc
 compile: false
@@ -47,8 +47,8 @@ save_agent: true
 exist_tol: 1e-5
 seed: 2016
 monitor_freq: 2500
-full_rank: false
-simnorm: true
+full_rank: true
+simnorm: false
 simnorm_dim: 8
 
 # planning
