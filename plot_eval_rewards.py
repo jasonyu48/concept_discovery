@@ -52,6 +52,12 @@ def plot_eval_rewards():
             'color': 'b',
             'marker': 'p'
         },
+        {
+            'path': '/home/jyu197/tdmpc2/tdmpc2/logs/cheetah-run/1/grad_from_policy_QR_011_full_rank_rgb_no_linear_no_simnorm/eval.csv',
+            'label': 'grad from both',
+            'color': 'y',
+            'marker': '^'
+        }
     ]
     
     # Create the plot

@@ -9,6 +9,7 @@ import matplotlib.pyplot as plt
 from pathlib import Path
 import pickle
 import time
+import imageio
 
 class SimpleEncodingSpaceMonitor:
     """
@@ -21,12 +22,14 @@ class SimpleEncodingSpaceMonitor:
         encoder: torch.nn.Module,
         env,
         device: str = "cuda",
-        save_dir: Optional[str] = None
+        save_dir: Optional[str] = None,
+        agent = None
     ):
         self.cfg = cfg
         self.encoder = encoder
         self.env = env
         self.device = device
+        self.agent = agent
         self.save_dir = Path(save_dir) if save_dir else Path("simple_encoding_logs")
         self.save_dir.mkdir(exist_ok=True)
         
@@ -96,9 +99,6 @@ class SimpleEncodingSpaceMonitor:
                     # Use the final observation (which contains consecutive 3 frames)
                     observations.append(obs)
                     observation_frames.append(frame_sequence)
-                    
-                    if (i + 1) % 10 == 0:
-                        print(f"   Generated {i + 1}/{len(self.seeds)} observations...")
                         
                 except Exception as e:
                     print(f"⚠️ Warning: Failed to generate consecutive frames with seed {seed}: {e}")
@@ -149,6 +149,21 @@ class SimpleEncodingSpaceMonitor:
         
         # Compute initial baseline encodings
         self._update_baseline_encodings()
+        
+        # Calculate and save initial encoding space size
+        initial_space_size = self.compute_encoding_space_size(self.baseline_encodings)
+        print(f"📏 Initial encoding space size: {initial_space_size:.6f}")
+        
+        # Store initial measurement in monitoring data
+        self.monitoring_data['steps'].append(0)
+        self.monitoring_data['encoding_space_size'].append(initial_space_size)
+        self.monitoring_data['encoding_values'].append(self.baseline_encodings.cpu().numpy().copy())
+        self.monitoring_data['timestamp'].append(time.time())
+        
+        # Generate GIFs immediately after creating baseline observations
+        print("🎬 Rendering baseline observation GIFs...")
+        self.save_observation_gifs(max_gifs=5)
+        
         return self.baseline_observations
     
     def _update_baseline_encodings(self):
@@ -189,8 +204,7 @@ class SimpleEncodingSpaceMonitor:
         if step % self.monitor_freq != 0:
             return {}
         
-        print(f"🔍 Monitoring encoding space at step {step}...")
-        start_time = time.time()
+        # start_time = time.time()
         
         # Update encodings with current encoder
         self._update_baseline_encodings()
@@ -202,7 +216,7 @@ class SimpleEncodingSpaceMonitor:
         metrics = {
             'step': step,
             'encoding_space_size': space_size,
-            'monitoring_time': time.time() - start_time
+            # 'monitoring_time': time.time() - start_time
         }
         
         # Update monitoring data
@@ -213,21 +227,21 @@ class SimpleEncodingSpaceMonitor:
         
         # Print summary
         print(f"   Encoding space size: {space_size:.6f}")
-        print(f"   Monitoring took {metrics['monitoring_time']:.2f}s")
+        # print(f"   Monitoring took {metrics['monitoring_time']:.2f}s")
         
-        # Auto-save periodically
+        # Auto-save periodically and generate updated plots
         if step % (self.monitor_freq * 5) == 0:
             self.save_monitoring_data()
-            
-        # Generate GIFs periodically (every 10k steps)
-        if step % 10000 == 0 and step > 0:
-            print(f"🎬 Generating observation GIFs at step {step}...")
+            # Generate updated encoding space curve plot
             try:
-                gif_dir = self.save_observation_gifs(max_gifs=3)
-                if gif_dir:
-                    print(f"   GIFs saved to: {gif_dir}")
+                self.plot_encoding_space_curve(save_plot=True)
+                print(f"   ✅ Updated encoding space curve saved!")
             except Exception as e:
-                print(f"   Failed to generate GIFs: {e}")
+                print(f"   ⚠️ Failed to generate encoding space curve: {e}")
+        
+        # Save model periodically to same path (every 5 monitoring steps)
+        if step % (self.monitor_freq * 5) == 0:
+            self._save_model_checkpoint(step)
         
         return metrics
     
@@ -237,6 +251,23 @@ class SimpleEncodingSpaceMonitor:
         with open(save_path, 'wb') as f:
             pickle.dump(self.monitoring_data, f)
         print(f"💾 Saved monitoring data to {save_path}")
+    
+    def _save_model_checkpoint(self, step: int):
+        """Save model checkpoint to same path (overwrites previous)"""
+        try:
+            # Create models directory if it doesn't exist
+            models_dir = self.save_dir / "models"
+            models_dir.mkdir(exist_ok=True)
+            
+            # Save to fixed path (overwrites previous checkpoint)
+            checkpoint_path = models_dir / "latest_checkpoint.pt"
+            
+            self.agent.save(checkpoint_path)
+            print(f"   ✅ Full agent checkpoint saved to {checkpoint_path}")
+
+        except Exception as e:
+            print(f"   ⚠️ Failed to save model checkpoint: {e}")
+
     
     def plot_encoding_space_curve(self, save_plot: bool = True):
         """Create simple plot showing encoding space size over time"""
@@ -279,7 +310,7 @@ class SimpleEncodingSpaceMonitor:
         plt.tight_layout()
         
         if save_plot:
-            plot_path = self.save_dir / f"encoding_space_curve_step_{steps[-1]}.png"
+            plot_path = self.save_dir / "encoding_space_curve.png"
             plt.savefig(plot_path, dpi=300, bbox_inches='tight')
             print(f"📊 Saved encoding space curve to {plot_path}")
         
@@ -331,12 +362,6 @@ Trend: {trend}
         gif_dir = self.save_dir / "observation_gifs"
         gif_dir.mkdir(exist_ok=True)
         
-        try:
-            import imageio
-        except ImportError:
-            print("⚠️ imageio not available, skipping GIF generation")
-            return
-        
         saved_gifs = 0
         for i, frame_sequence in enumerate(self.observation_frames[:max_gifs]):
             if len(frame_sequence) >= 3:  # Only save if we have enough frames
@@ -355,23 +380,20 @@ Trend: {trend}
                     # Save GIF with slower frame rate for better visualization
                     imageio.mimsave(gif_path, gif_frames, duration=0.5, loop=0)
                     saved_gifs += 1
-                    
-                    if saved_gifs == 1:
-                        print(f"   Saved first GIF: {gif_path}")
                         
                 except Exception as e:
                     print(f"   Failed to save GIF {i}: {e}")
         
-        print(f"✅ Saved {saved_gifs} consecutive frame GIFs to {gif_dir}")
-        return gif_dir
+        print(f"✅ Saved {saved_gifs} GIFs to {gif_dir}")
 
 # Integration function for easy use in training loop
-def create_simple_encoding_monitor(cfg, encoder, env, save_dir=None):
+def create_simple_encoding_monitor(cfg, encoder, env, save_dir=None, agent=None):
     """Factory function to create simple encoding monitor"""
     return SimpleEncodingSpaceMonitor(
         cfg=cfg,
         encoder=encoder,
         env=env,
         device=cfg.get('device', 'cuda'),
-        save_dir=save_dir or f"simple_encoding_logs_{cfg.exp_name}"
+        save_dir=save_dir or f"simple_encoding_logs_{cfg.exp_name}",
+        agent=agent
     )

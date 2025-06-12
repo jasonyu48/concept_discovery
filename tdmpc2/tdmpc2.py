@@ -411,7 +411,7 @@ class TDMPC2(torch.nn.Module):
 			info.update(math.termination_statistics(torch.sigmoid(termination_pred[-1]), terminated[-1]))
 		
 		# Monitor encoding space if available (simplified)
-		if hasattr(self, 'encoding_monitor') and self.encoding_monitor is not None and pretrain_step < 1:
+		if hasattr(self, 'encoding_monitor') and self.encoding_monitor is not None and (pretrain_step < 0 or pretrain_step+1 == self.cfg.monitor_freq):
 			encoding_metrics = self.encoding_monitor.monitor_step(step)
 			if encoding_metrics:  # Only add if monitoring was performed
 				info.update({

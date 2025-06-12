@@ -85,7 +85,8 @@ class OnlineTrainer(Trainer):
 					encoder=self.agent.model._encoder[self.cfg.obs],
 					env=self.env,
 					device=str(self.agent.device),
-					save_dir=self.cfg.work_dir / "encoding_monitor"
+					save_dir=self.cfg.work_dir / "encoding_monitor",
+					agent=self.agent
 				)
 				print("✅ Simple encoding space monitor initialized successfully!")
 			except Exception as e:
