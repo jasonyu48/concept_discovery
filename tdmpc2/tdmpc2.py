@@ -266,15 +266,15 @@ class TDMPC2(torch.nn.Module):
 		self.model.train()
 		
 		# Compute targets
-		if self.cfg.no_JEPA_sg:
-			# Encode next_z with gradients enabled
-			next_z = self.model.encode(obs[1:], task)
-			with torch.no_grad():
-				td_targets = self._td_target(next_z, reward, terminated, task)
-		else:
+		if self.cfg.JEPA_sg:
 			# Encode next_z without gradients (original behavior)
 			with torch.no_grad():
 				next_z = self.model.encode(obs[1:], task)
+				td_targets = self._td_target(next_z, reward, terminated, task)
+		else:
+			# Encode next_z with gradients enabled
+			next_z = self.model.encode(obs[1:], task)
+			with torch.no_grad():
 				td_targets = self._td_target(next_z, reward, terminated, task)
 
 		# Latent rollout
@@ -289,12 +289,21 @@ class TDMPC2(torch.nn.Module):
 
 		# Predictions
 		_zs = zs[:-1]
-		if self.cfg.no_grad_from_Q_R:
-			_zs = _zs.detach()
-		qs = self.model.Q(_zs, action, task, return_type='all')
-		reward_preds = self.model.reward(_zs, action, task)
+		if self.cfg.grad_from_Q:
+			_zs_q = _zs
+		else:
+			_zs_q = _zs.detach()
+		qs = self.model.Q(_zs_q, action, task, return_type='all')
+		if self.cfg.grad_from_R:
+			_zs_r = _zs
+		else:
+			_zs_r = _zs.detach()
+		reward_preds = self.model.reward(_zs_r, action, task)
 		if self.cfg.episodic:
-			termination_pred = self.model.termination(zs[1:], task, unnormalized=True)
+			if self.cfg.grad_from_Q or self.cfg.grad_from_R or self.cfg.grad_from_policy:
+				termination_pred = self.model.termination(zs[1:].detach(), task, unnormalized=True)
+			else:
+				termination_pred = self.model.termination(zs[1:], task, unnormalized=True)
 
 		# Compute losses
 		reward_loss, value_loss = 0, 0

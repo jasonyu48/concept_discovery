@@ -36,8 +36,9 @@ discount_max: 0.995
 buffer_size: 1_000_000
 exp_name: Default_True
 data_dir: ???
-no_JEPA_sg: false
-no_grad_from_Q_R: false
+JEPA_sg: true
+grad_from_Q: true
+grad_from_R: true
 grad_from_policy: false
 
 # misc

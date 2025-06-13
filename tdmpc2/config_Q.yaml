@@ -19,7 +19,7 @@ reward_coef: 0.1
 value_coef: 0.1
 termination_coef: 1
 consistency_coef: 20
-pi_coef: 0.11
+pi_coef: 1.0
 ortho_reg_coef: 0.005
 ortho_reg: false
 full_rank_reg: false
@@ -34,11 +34,11 @@ discount_denom: 5
 discount_min: 0.95
 discount_max: 0.995
 buffer_size: 1_000_000
-exp_name: GradFromQR_rgb_no_linear_no_simnorm
+exp_name: GradFromQ_rgb_no_linear_no_simnorm
 data_dir: ???
 JEPA_sg: false
 grad_from_Q: true
-grad_from_R: true
+grad_from_R: false
 grad_from_policy: false
 
 # misc

@@ -36,8 +36,9 @@ discount_max: 0.995
 buffer_size: 1_000_000
 exp_name: GradFromPolicy_full_rank_rgb_no_linear_no_simnorm
 data_dir: ???
-no_JEPA_sg: true
-no_grad_from_Q_R: true
+JEPA_sg: false
+grad_from_Q: false
+grad_from_R: false
 grad_from_policy: true
 
 # misc
