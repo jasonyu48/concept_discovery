@@ -3,7 +3,7 @@ defaults:
     - _self_
 
 # environment
-task: cheetah-run
+task: hopper-hop
 obs: rgb
 episodic: false
 
@@ -34,7 +34,7 @@ discount_denom: 5
 discount_min: 0.95
 discount_max: 0.995
 buffer_size: 1_000_000
-exp_name: GradFromQ_rgb_no_linear_no_simnorm
+exp_name: GradFromQ_rgb_no_linear_no_simnorm_hopper_hop
 data_dir: ???
 JEPA_sg: false
 grad_from_Q: true
