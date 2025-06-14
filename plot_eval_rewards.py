@@ -3,24 +3,24 @@
 import pandas as pd
 import matplotlib.pyplot as plt
 import os
+import argparse
 
-def plot_eval_rewards():
+def parse_args():
+    parser = argparse.ArgumentParser()
+    parser.add_argument('--seed', type=int, default=1)
+    return parser.parse_args()
+
+def plot_eval_rewards(seed):
     """
     Plot reward vs step from eval.csv files from three different experiments.
     """
     # Define the experiment directories and their labels
-    experiments = [
+    experiments_s1 = [
         {
             'path': './tdmpc2/logs/cheetah-run/1/default_rgb_long_no_linear/eval.csv',
             'label': 'tdmpc2(JEPA sg, grad from Q R)',
             'color': 'g',
             'marker': '^'
-        },
-        {
-            'path': '/home/jyu197/tdmpc2/tdmpc2/logs/cheetah-run/2015/default_rgb_no_linear_seed2015/eval.csv',
-            'label': 'tdmpc2(different seed)',
-            'color': 'g',
-            'marker': 's'
         },
         {
             'path': './tdmpc2/logs/cheetah-run/1/grad_from_policy_011_full_rank_rgb_no_linear_no_simnorm_size_check/eval.csv',
@@ -35,10 +35,37 @@ def plot_eval_rewards():
             'marker': '^'
         },
         {
+            'path': '/home/jyu197/tdmpc2/tdmpc2/logs/cheetah-run/1/grad_from_policy_QR_011_full_rank_rgb_no_linear_no_simnorm/eval.csv',
+            'label': 'grad from both',
+            'color': 'y',
+            'marker': '^'
+        }
+    ]
+    
+    experiments_s2015 = [
+        {
+            'path': '/home/jyu197/tdmpc2/tdmpc2/logs/cheetah-run/2015/default_rgb_no_linear_seed2015/eval.csv',
+            'label': 'tdmpc2',
+            'color': 'g',
+            'marker': 's'
+        },
+        {
+            'path': '/home/jyu197/tdmpc2/tdmpc2/logs/cheetah-run/2015/DefaulT/eval.csv',
+            'label': 'tdmpc2 (another run)',
+            'color': 'g',
+            'marker': 'p'
+        },
+        {
             'path': '/home/jyu197/tdmpc2/tdmpc2/logs/cheetah-run/2015/grad_from_Q_R_011_full_rank_rgb_no_linear_no_simnorm_seed2015/eval.csv',
-            'label': 'grad from Q R (different seed)',
+            'label': 'grad from Q R',
             'color': 'b',
             'marker': 's'
+        },
+        {
+            'path': '/home/jyu197/tdmpc2/tdmpc2/logs/cheetah-run/2015/GradFromQR_full_rank_rgb_no_linear_no_simnorm/eval.csv',
+            'label': 'grad from QR (another run)',
+            'color': 'b',
+            'marker': '^'
         },
         {
             'path': '/home/jyu197/tdmpc2/tdmpc2/logs/cheetah-run/2015/grad_from_Q_R_011_rgb_no_linear_no_simnorm_seed2015/eval.csv',
@@ -48,23 +75,93 @@ def plot_eval_rewards():
         },
         {
             'path': '/home/jyu197/tdmpc2/tdmpc2/logs/cheetah-run/2015/grad_from_Q_R_1_full_rank_rgb_no_linear_no_simnorm_seed2015/eval.csv',
-            'label': 'grad from Q R (different seed, grad weight)',
+            'label': 'grad from Q R (different grad weight)',
             'color': 'b',
             'marker': 'p'
         },
         {
-            'path': '/home/jyu197/tdmpc2/tdmpc2/logs/cheetah-run/1/grad_from_policy_QR_011_full_rank_rgb_no_linear_no_simnorm/eval.csv',
+            'path': '/home/jyu197/tdmpc2/tdmpc2/logs/cheetah-run/2015/GradFromBoth_full_rank_rgb_no_linear_no_simnorm/eval.csv',
             'label': 'grad from both',
             'color': 'y',
             'marker': '^'
-        }
+        },
+        {
+            'path': '/home/jyu197/tdmpc2/tdmpc2/logs/cheetah-run/2015/GradFromPolicy_full_rank_rgb_no_linear_no_simnorm_fr_reg/eval.csv',
+            'label': 'grad from policy (with regularization)',
+            'color': 'r',
+            'marker': '^'
+        },
     ]
-    
+
+    experiments_s2016 = [
+        {
+            'path': '/home/jyu197/tdmpc2/tdmpc2/logs/cheetah-run/2016/Default_True/eval.csv',
+            'label': 'tdmpc2',
+            'color': 'g',
+            'marker': 's'
+        },
+        {
+            'path': '/home/jyu197/tdmpc2/tdmpc2/logs/cheetah-run/2016/GradFromQR_rgb_no_linear_no_simnorm/eval.csv',
+            'label': 'grad from Q R',
+            'color': 'b',
+            'marker': 's'
+        },
+        {
+            'path': '/home/jyu197/tdmpc2/tdmpc2/logs/cheetah-run/2016/GradFromPolicy_full_rank_rgb_no_linear_no_simnorm2_fr_reg_strong2/eval.csv',
+            'label': 'grad from policy (with regularization)',
+            'color': 'r',
+            'marker': '^'
+        },
+        {
+            'path': '/home/jyu197/tdmpc2/tdmpc2/logs/cheetah-run/2016/GradFromBoth_full_rank_rgb_no_linear_no_simnorm2/eval.csv',
+            'label': 'grad from both',
+            'color': 'y',
+            'marker': '^'
+        },
+    ]
+
+    ablation = [
+        {
+            'path': '/home/jyu197/tdmpc2/tdmpc2/logs/cheetah-run/2015/grad_from_Q_R_011_full_rank_rgb_no_linear_no_simnorm_seed2015/eval.csv',
+            'label': 'grad from Q R',
+            'color': 'b',
+            'marker': 's'
+        },
+        {
+            'path': '/home/jyu197/tdmpc2/tdmpc2/logs/cheetah-run/2015/GradFromQR_full_rank_rgb_no_linear_no_simnorm/eval.csv',
+            'label': 'grad from QR (another run)',
+            'color': 'b',
+            'marker': '^'
+        },
+        {
+            'path': '/home/jyu197/tdmpc2/tdmpc2/logs/cheetah-run/2015/grad_from_Q_R_011_rgb_no_linear_no_simnorm_seed2015/eval.csv',
+            'label': 'grad from Q R no LU',
+            'color': 'b',
+            'marker': 'o'
+        },
+        {
+            'path': '/home/jyu197/tdmpc2/tdmpc2/logs/cheetah-run/2015/grad_from_Q_R_1_full_rank_rgb_no_linear_no_simnorm_seed2015/eval.csv',
+            'label': 'grad from Q R (different grad weight)',
+            'color': 'b',
+            'marker': 'p'
+        },
+    ]
+
+
     # Create the plot
     plt.figure(figsize=(12, 8))
     
     # Process each experiment
-    for exp in experiments:
+    if seed == 1:
+        exp_list = experiments_s1
+    elif seed == 2015:
+        exp_list = experiments_s2015
+    elif seed == 2016:
+        exp_list = experiments_s2016
+    elif seed == -1:
+        exp_list = ablation
+
+    for exp in exp_list:
         if os.path.exists(exp['path']):
             try:
                 # Read the CSV file
@@ -91,7 +188,7 @@ def plot_eval_rewards():
     # Formatting
     plt.xlabel('Training Steps', fontsize=14)
     plt.ylabel('Reward', fontsize=14)
-    plt.title('Evaluation Reward vs Training Steps', fontsize=16)
+    plt.title(f'Evaluation Reward vs Training Steps (seed={seed})', fontsize=16)
     plt.legend(fontsize=12)
     plt.grid(True, alpha=0.3)
     
@@ -105,8 +202,9 @@ def plot_eval_rewards():
     plt.tight_layout()
     
     # Save the plot
-    plt.savefig('eval_reward_comparison.png', dpi=300, bbox_inches='tight')
+    plt.savefig(f'eval_reward_comparison_seed={seed}.png', dpi=300, bbox_inches='tight')
     plt.show()
 
 if __name__ == "__main__":
-    plot_eval_rewards() 
+    args = parse_args()
+    plot_eval_rewards(args.seed) 

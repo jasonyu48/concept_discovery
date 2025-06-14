@@ -34,7 +34,7 @@ discount_denom: 5
 discount_min: 0.95
 discount_max: 0.995
 buffer_size: 1_000_000
-exp_name: Default_True
+exp_name: DefaulT
 data_dir: ???
 JEPA_sg: true
 grad_from_Q: true
@@ -46,7 +46,7 @@ compile: false
 save_video: true
 save_agent: true
 exist_tol: 1e-5
-seed: 2016
+seed: 2015
 monitor_freq: 2500
 full_rank: false
 simnorm: true
