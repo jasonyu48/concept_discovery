@@ -3,7 +3,7 @@
 Batch training script for TD-MPC2.
 
 This script automatically runs train.py using all configuration files 
-from the specified task directories (fish, hopper, walker).
+from the specified task directories (fish, hopper, walker, policy).
 
 Usage:
     python batch_train.py [options]
@@ -22,7 +22,7 @@ import argparse
 import subprocess
 import concurrent.futures
 from pathlib import Path
-from typing import List, Optional
+from typing import List, Optional, Set
 import time
 
 class BatchTrainer:
@@ -33,8 +33,7 @@ class BatchTrainer:
                  max_workers: int = 4,
                  dry_run: str = 'False'):
         
-        self.tasks = tasks or ['fish', 'hopper', 'walker']
-        self.configs = configs or ['config_QR', 'config_Q', 'config_R', 'config_default']
+        self.tasks = tasks or ['fish', 'hopper', 'walker', 'policy']
         self.parallel = parallel
         self.max_workers = max_workers
         self.dry_run = dry_run
@@ -45,8 +44,49 @@ class BatchTrainer:
         self.train_script = 'train.py'  # Relative to tdmpc2 directory
         self.config_base_path = self.tdmpc2_path / 'config'
         
-        # Validate paths
+        # Validate paths and discover configs
         self._validate_setup()
+        
+        # If configs are provided, use them; otherwise discover them
+        if configs:
+            self.configs = configs
+            # Validate that provided configs exist
+            self._validate_provided_configs()
+        else:
+            self.configs = self._discover_configs()
+            print(f"Auto-discovered configs: {self.configs}")
+    
+    def _discover_configs(self) -> List[str]:
+        """Discover all available config files across all task directories."""
+        all_configs = set()
+        
+        for task in self.tasks:
+            task_config_dir = self.config_base_path / task
+            if task_config_dir.exists():
+                # Find all .yaml files in the task directory
+                yaml_files = list(task_config_dir.glob("*.yaml"))
+                task_configs = [f.stem for f in yaml_files]  # Remove .yaml extension
+                all_configs.update(task_configs)
+                print(f"Found configs for {task}: {task_configs}")
+        
+        configs_list = sorted(list(all_configs))
+        
+        if not configs_list:
+            raise FileNotFoundError("No config files found in any task directories")
+        
+        return configs_list
+    
+    def _validate_provided_configs(self):
+        """Validate that all provided config files exist for all tasks."""
+        for task in self.tasks:
+            task_config_dir = self.config_base_path / task
+            if not task_config_dir.exists():
+                continue
+                
+            for config in self.configs:
+                config_file = task_config_dir / f"{config}.yaml"
+                if not config_file.exists():
+                    print(f"Warning: Config file not found: {config_file}")
     
     def _validate_setup(self):
         """Validate that all required files and directories exist."""
@@ -61,17 +101,16 @@ class BatchTrainer:
             task_config_dir = self.config_base_path / task
             if not task_config_dir.exists():
                 raise FileNotFoundError(f"Task config directory not found: {task_config_dir}")
-            
-            # Check if all specified config files exist for this task
-            for config in self.configs:
-                config_file = task_config_dir / f"{config}.yaml"
-                if not config_file.exists():
-                    print(f"Warning: Config file not found: {config_file}")
     
     def _run_single_config(self, task: str, config: str) -> tuple:
         """Run training with a single configuration."""
         config_path = self.config_base_path / task
         config_name = config
+        
+        # Check if this specific config exists for this task
+        config_file = config_path / f"{config_name}.yaml"
+        if not config_file.exists():
+            return task, config, "SKIPPED", f"Config file not found: {config_file}", 0
         
         # Build the command
         cmd = [
@@ -166,10 +205,12 @@ class BatchTrainer:
         
         successful = [r for r in results if r[2] == "SUCCESS"]
         failed = [r for r in results if r[2] in ["FAILED", "ERROR", "TIMEOUT"]]
+        skipped = [r for r in results if r[2] == "SKIPPED"]
         
         print(f"Total configurations: {len(results)}")
         print(f"Successful: {len(successful)}")
         print(f"Failed: {len(failed)}")
+        print(f"Skipped: {len(skipped)}")
         
         if successful:
             print(f"\nSuccessful runs:")
@@ -183,20 +224,24 @@ class BatchTrainer:
                 if "STDERR:" in message:
                     print(f"    Error: {message.split('STDERR:')[1].strip()}")
         
+        if skipped:
+            print(f"\nSkipped runs:")
+            for task, config, status, message, duration in skipped:
+                print(f"  - {task:10s} - {config:15s} - {message}")
+        
         total_time = sum(r[4] for r in results if r[4] > 0)
         print(f"\nTotal execution time: {total_time:.1f} seconds ({total_time/60:.1f} minutes)")
 
 
 def main():
     parser = argparse.ArgumentParser(description='Batch training script for TD-MPC2')
-    parser.add_argument('--tasks', nargs='+', default=['hopper'],
+    parser.add_argument('--tasks', nargs='+', default=['policy'],
                        help='List of tasks to run')
-    parser.add_argument('--configs', nargs='+', 
-                       default=['config_QR', 'config_Q', 'config_R', 'config_default'],
-                       help='List of config variants to run')
+    parser.add_argument('--configs', nargs='+', default=None,
+                       help='List of config variants to run (if not provided, will auto-discover from task directories)')
     parser.add_argument('--parallel', type=str, default='False', choices=['True', 'False'],
                        help='Run configurations in parallel')
-    parser.add_argument('--max-workers', type=int, default=4,
+    parser.add_argument('--max-workers', type=int, default=2,
                        help='Maximum number of parallel workers')
     parser.add_argument('--dry-run', type=str, default='False', choices=['True', 'False'],
                        help='Print commands without executing them')
