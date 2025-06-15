@@ -36,7 +36,7 @@ def plot_eval_rewards(seed):
         },
         {
             'path': '/home/jyu197/tdmpc2/tdmpc2/logs/cheetah-run/1/grad_from_policy_QR_011_full_rank_rgb_no_linear_no_simnorm/eval.csv',
-            'label': 'grad from both',
+            'label': 'grad from all',
             'color': 'y',
             'marker': '^'
         }
@@ -73,15 +73,15 @@ def plot_eval_rewards(seed):
             'color': 'b',
             'marker': 'o'
         },
-        {
-            'path': '/home/jyu197/tdmpc2/tdmpc2/logs/cheetah-run/2015/grad_from_Q_R_1_full_rank_rgb_no_linear_no_simnorm_seed2015/eval.csv',
-            'label': 'grad from Q R (different grad weight)',
-            'color': 'b',
-            'marker': 'p'
-        },
+        # {
+        #     'path': '/home/jyu197/tdmpc2/tdmpc2/logs/cheetah-run/2015/grad_from_Q_R_1_full_rank_rgb_no_linear_no_simnorm_seed2015/eval.csv',
+        #     'label': 'grad from Q R (different grad weight)',
+        #     'color': 'b',
+        #     'marker': 'p'
+        # },
         {
             'path': '/home/jyu197/tdmpc2/tdmpc2/logs/cheetah-run/2015/GradFromBoth_full_rank_rgb_no_linear_no_simnorm/eval.csv',
-            'label': 'grad from both',
+            'label': 'grad from all',
             'color': 'y',
             'marker': '^'
         },
@@ -124,13 +124,13 @@ def plot_eval_rewards(seed):
         {
             'path': '/home/jyu197/tdmpc2/tdmpc2/logs/cheetah-run/2015/grad_from_Q_R_011_full_rank_rgb_no_linear_no_simnorm_seed2015/eval.csv',
             'label': 'grad from Q R',
-            'color': 'b',
+            'color': 'r',
             'marker': 's'
         },
         {
             'path': '/home/jyu197/tdmpc2/tdmpc2/logs/cheetah-run/2015/GradFromQR_full_rank_rgb_no_linear_no_simnorm/eval.csv',
             'label': 'grad from QR (another run)',
-            'color': 'b',
+            'color': 'g',
             'marker': '^'
         },
         {
@@ -139,12 +139,12 @@ def plot_eval_rewards(seed):
             'color': 'b',
             'marker': 'o'
         },
-        {
-            'path': '/home/jyu197/tdmpc2/tdmpc2/logs/cheetah-run/2015/grad_from_Q_R_1_full_rank_rgb_no_linear_no_simnorm_seed2015/eval.csv',
-            'label': 'grad from Q R (different grad weight)',
-            'color': 'b',
-            'marker': 'p'
-        },
+        # {
+        #     'path': '/home/jyu197/tdmpc2/tdmpc2/logs/cheetah-run/2015/grad_from_Q_R_1_full_rank_rgb_no_linear_no_simnorm_seed2015/eval.csv',
+        #     'label': 'grad from Q R (different grad weight)',
+        #     'color': 'y',
+        #     'marker': 'p'
+        # },
     ]
 
 
@@ -188,7 +188,7 @@ def plot_eval_rewards(seed):
     # Formatting
     plt.xlabel('Training Steps', fontsize=14)
     plt.ylabel('Reward', fontsize=14)
-    plt.title(f'Evaluation Reward vs Training Steps (seed={seed})', fontsize=16)
+    plt.title(f'Evaluation Reward vs Training Steps ({"seed="+str(seed) if seed != -1 else "ablation"})', fontsize=16)
     plt.legend(fontsize=12)
     plt.grid(True, alpha=0.3)
     
@@ -202,7 +202,7 @@ def plot_eval_rewards(seed):
     plt.tight_layout()
     
     # Save the plot
-    plt.savefig(f'eval_reward_comparison_seed={seed}.png', dpi=300, bbox_inches='tight')
+    plt.savefig(f'eval_reward_comparison_{"seed"+str(seed) if seed != -1 else "ablation"}.png', dpi=300, bbox_inches='tight')
     plt.show()
 
 if __name__ == "__main__":
