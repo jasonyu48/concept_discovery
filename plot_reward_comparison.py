@@ -64,6 +64,15 @@ def plot_environment_rewards(env_name, eval_files_info, output_dir="./"):
     """
     Plot reward curves for a single environment
     """
+    # Define consistent colors for each experiment type
+    color_map = {
+        "tdmpc2": "green",
+        "gradient from policy": "red", 
+        "gradient from Q": "orange",
+        "gradient from reward": "purple",
+        "gradient from Q and reward": "blue"
+    }
+    
     plt.figure(figsize=(12, 8))
     
     for file_info in eval_files_info:
@@ -79,8 +88,14 @@ def plot_environment_rewards(env_name, eval_files_info, output_dir="./"):
             # Get the proper label
             label = get_label_from_experiment_details(file_info['experiment_details'])
             
+            # Get the color for this experiment type
+            color = color_map.get(label, "black")  # Default black for unknown types
+            
             # Plot the reward curve
-            plt.plot(df['step'], df['episode_reward'], label=f"{label} (seed={file_info['seed']})", linewidth=2)
+            plt.plot(df['step'], df['episode_reward'], 
+                    label=f"{label} (seed={file_info['seed']})", 
+                    linewidth=2, 
+                    color=color)
             
         except Exception as e:
             print(f"Error processing {file_info['path']}: {e}")
