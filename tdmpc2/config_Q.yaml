@@ -13,7 +13,7 @@ eval_episodes: 10
 eval_freq: 25000
 
 # training
-steps: 1_000_000 # 14 hours
+steps: 350_000
 batch_size: 256
 reward_coef: 0.1
 value_coef: 0.1
@@ -40,7 +40,6 @@ JEPA_sg: false
 grad_from_Q: true
 grad_from_R: false
 grad_from_policy: false
-q_sample_ratio: 0.5  # Ratio of buffer data visible to Q-function training (0.0-1.0)
 
 # misc
 compile: false

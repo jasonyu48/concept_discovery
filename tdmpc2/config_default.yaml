@@ -34,7 +34,6 @@ discount_denom: 5
 discount_min: 0.95
 discount_max: 0.995
 buffer_size: 1_000_000
-q_sample_ratio: 1.0  # Ratio of buffer data visible to Q-function training (0.0-1.0)
 exp_name: DefaulT
 data_dir: ???
 JEPA_sg: true
