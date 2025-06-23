@@ -307,10 +307,26 @@ class TDMPC2(torch.nn.Module):
 
 		# Compute losses
 		reward_loss, value_loss = 0, 0
+		
+		# Get Q-function mask from buffer if available
+		q_mask = None
+		if hasattr(self, '_current_buffer') and hasattr(self._current_buffer, 'get_q_mask_for_batch'):
+			q_mask = self._current_buffer.get_q_mask_for_batch(obs, action, reward, terminated, task)
+		
 		for t, (rew_pred_unbind, rew_unbind, td_targets_unbind, qs_unbind) in enumerate(zip(reward_preds.unbind(0), reward.unbind(0), td_targets.unbind(0), qs.unbind(1))):
 			reward_loss = reward_loss + math.soft_ce(rew_pred_unbind, rew_unbind, self.cfg).mean() * self.cfg.rho**t
+			
+			# Apply Q-function mask to value loss if available
 			for _, qs_unbind_unbind in enumerate(qs_unbind.unbind(0)):
-				value_loss = value_loss + math.soft_ce(qs_unbind_unbind, td_targets_unbind, self.cfg).mean() * self.cfg.rho**t
+				q_loss = math.soft_ce(qs_unbind_unbind, td_targets_unbind, self.cfg)
+				if q_mask is not None:
+					# Apply mask to Q-function loss
+					q_loss = q_loss * q_mask.float()
+					# Normalize by number of visible samples to maintain loss scale
+					q_loss = q_loss.sum() / q_mask.sum().float().clamp(min=1.0)
+				else:
+					q_loss = q_loss.mean()
+				value_loss = value_loss + q_loss * self.cfg.rho**t
 
 		consistency_loss = consistency_loss / self.cfg.horizon
 		reward_loss = reward_loss / self.cfg.horizon
@@ -443,6 +459,9 @@ class TDMPC2(torch.nn.Module):
 		Returns:
 			dict: Dictionary of training statistics.
 		"""
+		# Store buffer reference for Q-function masking
+		self._current_buffer = buffer
+		
 		obs, action, reward, terminated, task = buffer.sample()
 		kwargs = {}
 		if task is not None:

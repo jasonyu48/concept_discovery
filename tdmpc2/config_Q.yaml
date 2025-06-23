@@ -34,7 +34,8 @@ discount_denom: 5
 discount_min: 0.95
 discount_max: 0.995
 buffer_size: 1_000_000
-exp_name: GradFromQ_rgb_no_linear_no_simnorm
+q_sample_ratio: 0.5  # Ratio of buffer data visible to Q-function training (0.0-1.0)
+exp_name: PortionGradFromQ_rgb_no_linear_no_simnorm
 data_dir: ???
 JEPA_sg: false
 grad_from_Q: true
