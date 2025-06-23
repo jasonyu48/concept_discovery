@@ -443,7 +443,15 @@ class TDMPC2(torch.nn.Module):
 		Returns:
 			dict: Dictionary of training statistics.
 		"""
-		obs, action, reward, terminated, task = buffer.sample()
+		# Update Q-function mask periodically (e.g., every 1000 steps)
+		if hasattr(buffer, 'update_q_mask') and step % 1000 == 0:
+			buffer.update_q_mask()
+		
+		# Use masked sampling for Q-function training
+		if hasattr(buffer, 'sample_for_q'):
+			obs, action, reward, terminated, task = buffer.sample_for_q()
+		else:
+			obs, action, reward, terminated, task = buffer.sample()
 		kwargs = {}
 		if task is not None:
 			kwargs["task"] = task
