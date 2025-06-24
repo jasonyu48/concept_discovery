@@ -261,7 +261,7 @@ class TDMPC2(torch.nn.Module):
 		discount = self.discount[task].unsqueeze(-1) if self.cfg.multitask else self.discount
 		return reward + discount * (1-terminated) * self.model.Q(next_z, action, task, return_type='min', target=True)
 
-	def _update(self, obs, action, reward, terminated, task=None, step=None, pretrain_step=-1):
+	def _update(self, obs, action, reward, terminated, q_mask=None, task=None, step=None, pretrain_step=-1):
 		# Prepare for update
 		self.model.train()
 		
@@ -307,13 +307,6 @@ class TDMPC2(torch.nn.Module):
 
 		# Compute losses
 		reward_loss, value_loss = 0, 0
-		
-		# Get Q-function mask from buffer if available
-		q_mask = None
-		if hasattr(self, '_current_buffer') and hasattr(self._current_buffer, 'get_q_mask_for_batch'):
-			# Use the episode_ids stored during update() call
-			if hasattr(self, '_current_episode_ids'):
-				q_mask = self._current_buffer.get_q_mask_for_batch(self._current_episode_ids)
 		
 		for t, (rew_pred_unbind, rew_unbind, td_targets_unbind, qs_unbind) in enumerate(zip(reward_preds.unbind(0), reward.unbind(0), td_targets.unbind(0), qs.unbind(1))):
 			reward_loss = reward_loss + math.soft_ce(rew_pred_unbind, rew_unbind, self.cfg).mean() * self.cfg.rho**t
@@ -461,12 +454,7 @@ class TDMPC2(torch.nn.Module):
 		Returns:
 			dict: Dictionary of training statistics.
 		"""
-		# Store buffer reference for Q-function masking
-		self._current_buffer = buffer
-		
-		obs, action, reward, terminated, task, episode_ids = buffer.sample()
-		# Store episode_ids for Q-function masking
-		self._current_episode_ids = episode_ids
+		obs, action, reward, terminated, task, q_mask = buffer.sample()
 		
 		kwargs = {}
 		if task is not None:
@@ -474,6 +462,6 @@ class TDMPC2(torch.nn.Module):
 		torch.compiler.cudagraph_mark_step_begin()
 		
 		# Run main update
-		update_info = self._update(obs, action, reward, terminated, **kwargs, step=step, pretrain_step=pretrain_step)
+		update_info = self._update(obs, action, reward, terminated, q_mask=q_mask, **kwargs, step=step, pretrain_step=pretrain_step)
 		
 		return update_info

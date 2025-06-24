@@ -132,8 +132,10 @@ class Buffer():
 		# Process the batch normally
 		obs, action, reward, terminated, task = self._prepare_batch(td)
 		
-		# Return episode IDs along with other data
-		return obs, action, reward, terminated, task, episode_ids
+		# Generate Q-function mask for this batch
+		q_mask = self.get_q_mask_for_batch(episode_ids)
+		
+		return obs, action, reward, terminated, task, q_mask
 
 	def get_q_mask_for_batch(self, episode_ids):
 		"""
@@ -179,15 +181,13 @@ class Buffer():
 		if old_num_eps == 0:
 			# First time creating mask - initial setup
 			# Use round() instead of int() to handle odd numbers better
-			num_visible = max(1, round(self._num_eps * self._q_sample_ratio))
-			perm = torch.randperm(self._num_eps)
-			visible_indices = perm[:num_visible]
+			num_visible = round(self._num_eps * self._q_sample_ratio)
 			self._q_mask = torch.zeros(self._num_eps, dtype=torch.bool)
-			self._q_mask[visible_indices] = True
+			if num_visible > 0:
+				perm = torch.randperm(self._num_eps)
+				visible_indices = perm[:num_visible]
+				self._q_mask[visible_indices] = True
 			self._q_mask_episodes = num_visible
-			actual_ratio = num_visible / self._num_eps
-			print(f"Q-function mask initialized: {self._q_mask_episodes}/{self._num_eps} episodes visible "
-			      f"(target: {self._q_sample_ratio:.2f}, actual: {actual_ratio:.2f})")
 			
 		elif self._num_eps > old_num_eps:
 			# New episodes added - extend mask but keep old visible episodes unchanged
@@ -196,7 +196,7 @@ class Buffer():
 			current_visible = old_mask.sum().item()
 			
 			# Calculate target visible episodes with rounding for better handling of odd numbers
-			target_visible = max(1, round(self._num_eps * self._q_sample_ratio))
+			target_visible = round(self._num_eps * self._q_sample_ratio)
 			
 			# How many of the new episodes should be visible
 			new_visible_needed = max(0, target_visible - current_visible)
@@ -211,16 +211,6 @@ class Buffer():
 			# Combine old and new masks
 			self._q_mask = torch.cat([old_mask, new_mask_part])
 			self._q_mask_episodes = self._q_mask.sum().item()
-			
-			actual_ratio = self._q_mask_episodes / self._num_eps
-			print(f"Q-function mask extended: {self._q_mask_episodes}/{self._num_eps} episodes visible "
-			      f"(kept {current_visible} old + added {new_visible} new, "
-			      f"target: {self._q_sample_ratio:.2f}, actual: {actual_ratio:.2f})")
-		# If episode count unchanged, mask remains the same (no update needed)
-
-	def update_q_mask(self):
-		"""Manual mask update method (for compatibility/testing)."""
-		self._update_q_mask_on_new_episodes()
 
 	@property
 	def q_visible_episodes(self):
