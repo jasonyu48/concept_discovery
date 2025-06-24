@@ -125,35 +125,39 @@ class Buffer():
 	def sample(self):
 		"""Sample a batch of subsequences from the buffer."""
 		td = self._buffer.sample().view(-1, self.cfg.horizon+1).permute(1, 0)
-		return self._prepare_batch(td)
+		
+		# Extract episode IDs before processing
+		episode_ids = td.get('episode')[0].contiguous()  # Get episode IDs for each sample
+		
+		# Process the batch normally
+		obs, action, reward, terminated, task = self._prepare_batch(td)
+		
+		# Return episode IDs along with other data
+		return obs, action, reward, terminated, task, episode_ids
 
-	def get_q_mask_for_batch(self, obs, action, reward, terminated, task):
+	def get_q_mask_for_batch(self, episode_ids):
 		"""
 		Get a mask indicating which samples in the current batch should be used for Q-function training.
 		
 		Args:
-			obs, action, reward, terminated, task: The current batch data
+			episode_ids: Tensor of episode IDs for each sample in the batch
 		
 		Returns:
 			torch.Tensor: Boolean mask of shape (batch_size,) indicating which samples to use for Q-function
 		"""
 		if self._q_sample_ratio >= 1.0 or self._q_mask is None:
 			# Use all samples
-			return torch.ones(self.cfg.batch_size, dtype=torch.bool, device=self._device)
+			return torch.ones(len(episode_ids), dtype=torch.bool, device=self._device)
 		
-		# We need to determine which episodes each sample in the batch comes from
-		# This is tricky because we don't have direct access to episode IDs in the processed batch
-		# For now, we'll use a simple approach: randomly mask samples in the batch
-		# This is a approximation of the episode-level masking
+		# Create mask based on episode visibility
+		batch_mask = torch.zeros(len(episode_ids), dtype=torch.bool, device=self._device)
 		
-		visible_ratio = self._q_mask_episodes / max(self._num_eps, 1)
-		num_visible_samples = max(1, int(self.cfg.batch_size * visible_ratio))
+		# For each sample in batch, check if its episode is visible to Q-function
+		for i, ep_id in enumerate(episode_ids):
+			if ep_id < len(self._q_mask) and self._q_mask[ep_id]:
+				batch_mask[i] = True
 		
-		mask = torch.zeros(self.cfg.batch_size, dtype=torch.bool, device=self._device)
-		visible_indices = torch.randperm(self.cfg.batch_size, device=self._device)[:num_visible_samples]
-		mask[visible_indices] = True
-		
-		return mask
+		return batch_mask
 
 	def _update_q_mask_on_new_episodes(self):
 		"""Update the mask for Q-function training when new episodes are added.

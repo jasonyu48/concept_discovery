@@ -311,7 +311,9 @@ class TDMPC2(torch.nn.Module):
 		# Get Q-function mask from buffer if available
 		q_mask = None
 		if hasattr(self, '_current_buffer') and hasattr(self._current_buffer, 'get_q_mask_for_batch'):
-			q_mask = self._current_buffer.get_q_mask_for_batch(obs, action, reward, terminated, task)
+			# Use the episode_ids stored during update() call
+			if hasattr(self, '_current_episode_ids'):
+				q_mask = self._current_buffer.get_q_mask_for_batch(self._current_episode_ids)
 		
 		for t, (rew_pred_unbind, rew_unbind, td_targets_unbind, qs_unbind) in enumerate(zip(reward_preds.unbind(0), reward.unbind(0), td_targets.unbind(0), qs.unbind(1))):
 			reward_loss = reward_loss + math.soft_ce(rew_pred_unbind, rew_unbind, self.cfg).mean() * self.cfg.rho**t
@@ -462,7 +464,10 @@ class TDMPC2(torch.nn.Module):
 		# Store buffer reference for Q-function masking
 		self._current_buffer = buffer
 		
-		obs, action, reward, terminated, task = buffer.sample()
+		obs, action, reward, terminated, task, episode_ids = buffer.sample()
+		# Store episode_ids for Q-function masking
+		self._current_episode_ids = episode_ids
+		
 		kwargs = {}
 		if task is not None:
 			kwargs["task"] = task
