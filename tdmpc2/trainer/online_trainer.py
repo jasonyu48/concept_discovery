@@ -88,7 +88,6 @@ class OnlineTrainer(Trainer):
 					save_dir=self.cfg.work_dir / "encoding_monitor",
 					agent=self.agent
 				)
-				print("✅ Simple encoding space monitor initialized successfully!")
 			except Exception as e:
 				print(f"⚠️ Failed to initialize encoding space monitor: {e}")
 				print("   Continuing training without encoding space monitoring...")

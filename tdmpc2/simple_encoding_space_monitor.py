@@ -3,6 +3,7 @@
 # Purpose: Monitor encoding space size and changes over time (simplified version)
 
 import torch
+from torch.func import jacrev, vmap
 import numpy as np
 from typing import List, Dict, Tuple, Optional
 import matplotlib.pyplot as plt
@@ -43,6 +44,7 @@ class SimpleEncodingSpaceMonitor:
             'steps': [],
             'encoding_space_size': [],  # Only this metric
             'encoding_values': [],      # Store actual encoding values for analysis
+            'min_jacobian_rank': [],    # New: track minimum Jacobian rank
             'timestamp': []
         }
         
@@ -56,7 +58,6 @@ class SimpleEncodingSpaceMonitor:
         print(f"   - Monitoring frequency: every {self.monitor_freq} steps")
         print(f"   - Seed observations: {self.num_seed_obs}")
         print(f"   - Save directory: {self.save_dir}")
-        print(f"   - Focus: Encoding space size only")
     
     def _generate_baseline_observations(self):
         """Generate diverse baseline observations using different seeds with consecutive frames"""
@@ -153,11 +154,16 @@ class SimpleEncodingSpaceMonitor:
         # Calculate and save initial encoding space size
         initial_space_size = self.compute_encoding_space_size(self.baseline_encodings)
         print(f"📏 Initial encoding space size: {initial_space_size:.6f}")
-        
+
+        # Calculate initial minimum Jacobian rank
+        initial_min_rank = self.compute_min_jacobian_rank(self.baseline_observations)
+        print(f"🔢 Initial minimum Jacobian rank: {initial_min_rank}")
+
         # Store initial measurement in monitoring data
         self.monitoring_data['steps'].append(0)
         self.monitoring_data['encoding_space_size'].append(initial_space_size)
         self.monitoring_data['encoding_values'].append(self.baseline_encodings.cpu().numpy().copy())
+        self.monitoring_data['min_jacobian_rank'].append(initial_min_rank)
         self.monitoring_data['timestamp'].append(time.time())
         
         # Generate GIFs immediately after creating baseline observations
@@ -194,6 +200,33 @@ class SimpleEncodingSpaceMonitor:
         
         return distances.mean().item()
     
+    def compute_min_jacobian_rank(self, observations: torch.Tensor) -> int:
+        """Compute the minimum rank of the encoder Jacobian dE/dx over a batch.
+        """
+        # Ensure the tensor has gradients enabled
+        obs = observations.detach().clone().to(self.device).requires_grad_(True)
+
+        # Define a helper that returns encoder output for a *single* sample
+        if hasattr(self.encoder, 'encode'):
+            def single_forward(x_single: torch.Tensor):
+                task = torch.zeros(1, self.cfg.task_dim, device=self.device)
+                # Add batch dim expected by encode, then squeeze back
+                return self.encoder.encode(x_single.unsqueeze(0), task).squeeze(0)
+        else:
+            def single_forward(x_single: torch.Tensor):
+                return self.encoder(x_single.unsqueeze(0)).squeeze(0)
+
+
+        jac_single = jacrev(single_forward)
+        # vmap maps jac_single over the batch dimension of obs yielding
+        # shape (B, E_dim, *input_shape)
+        jac_batch = vmap(jac_single, randomness="same")(obs)
+        jac_batch = jac_batch.flatten(start_dim=2)
+
+        # Compute rank for each sample (batched matrix_rank supported by PyTorch)
+        ranks = torch.linalg.matrix_rank(jac_batch)
+        return int(ranks.min().item())
+    
     def monitor_step(self, step: int) -> Dict[str, float]:
         """
         Perform monitoring at given training step - simplified version
@@ -211,22 +244,26 @@ class SimpleEncodingSpaceMonitor:
         
         # Compute only the encoding space size
         space_size = self.compute_encoding_space_size(self.baseline_encodings)
+        # Compute minimum Jacobian rank
+        min_rank = self.compute_min_jacobian_rank(self.baseline_observations)
         
         # Store results (simplified)
         metrics = {
             'step': step,
             'encoding_space_size': space_size,
-            # 'monitoring_time': time.time() - start_time
+            'min_jacobian_rank': float(min_rank),  # cast to float for downstream reductions
         }
         
         # Update monitoring data
         self.monitoring_data['steps'].append(step)
         self.monitoring_data['encoding_space_size'].append(space_size)
         self.monitoring_data['encoding_values'].append(self.baseline_encodings.cpu().numpy().copy())
+        self.monitoring_data['min_jacobian_rank'].append(min_rank)
         self.monitoring_data['timestamp'].append(time.time())
         
         # Print summary
         print(f"   Encoding space size: {space_size:.6f}")
+        print(f"   Minimum Jacobian rank: {float(min_rank)}")
         # print(f"   Monitoring took {metrics['monitoring_time']:.2f}s")
         
         # Auto-save periodically and generate updated plots
@@ -278,34 +315,33 @@ class SimpleEncodingSpaceMonitor:
         plt.figure(figsize=(12, 6))
         steps = np.array(self.monitoring_data['steps'])
         space_sizes = np.array(self.monitoring_data['encoding_space_size'])
+        ranks = np.array(self.monitoring_data['min_jacobian_rank'])
         
-        # Main plot
+        # Main plot: encoding space size
         plt.subplot(1, 2, 1)
         plt.plot(steps, space_sizes, 'b-o', linewidth=2, markersize=4)
         plt.title('Encoding Space Size Over Training', fontsize=14, fontweight='bold')
         plt.xlabel('Training Steps')
-        plt.ylabel('Average Pairwise Distance')
+        plt.ylabel('Avg. Pairwise Distance')
         plt.grid(True, alpha=0.3)
         
-        # Add some statistics
+        # Statistics annotation
         if len(space_sizes) > 1:
             initial_size = space_sizes[0]
             current_size = space_sizes[-1]
             change_percent = ((current_size - initial_size) / initial_size) * 100
-            plt.text(0.02, 0.98, f'Initial: {initial_size:.4f}\nCurrent: {current_size:.4f}\nChange: {change_percent:+.1f}%', 
-                    transform=plt.gca().transAxes, verticalalignment='top',
-                    bbox=dict(boxstyle='round', facecolor='wheat', alpha=0.8))
+            plt.text(0.02, 0.98,
+                     f'Initial: {initial_size:.4f}\nCurrent: {current_size:.4f}\nChange: {change_percent:+.1f}%',
+                     transform=plt.gca().transAxes, verticalalignment='top',
+                     bbox=dict(boxstyle='round', facecolor='wheat', alpha=0.8))
         
-        # Derivative plot (rate of change)
+        # Right subplot: minimum Jacobian rank curve
         plt.subplot(1, 2, 2)
-        if len(space_sizes) > 1:
-            derivatives = np.diff(space_sizes) / np.diff(steps)
-            plt.plot(steps[1:], derivatives, 'r-o', linewidth=2, markersize=4)
-            plt.title('Rate of Change in Encoding Space', fontsize=14, fontweight='bold')
-            plt.xlabel('Training Steps')
-            plt.ylabel('Change Rate')
-            plt.grid(True, alpha=0.3)
-            plt.axhline(y=0, color='black', linestyle='--', alpha=0.5)
+        plt.plot(steps, ranks, 'g-o', linewidth=2, markersize=4)
+        plt.title('Minimum Jacobian Rank Over Training', fontsize=14, fontweight='bold')
+        plt.xlabel('Training Steps')
+        plt.ylabel('Rank')
+        plt.grid(True, alpha=0.3)
         
         plt.tight_layout()
         
@@ -323,6 +359,7 @@ class SimpleEncodingSpaceMonitor:
         
         step = self.monitoring_data['steps'][-1]
         space_size = self.monitoring_data['encoding_space_size'][-1]
+        min_rank = self.monitoring_data['min_jacobian_rank'][-1]
         
         # Calculate trend
         if len(self.monitoring_data['encoding_space_size']) > 1:
@@ -337,6 +374,7 @@ class SimpleEncodingSpaceMonitor:
 📊 SIMPLE ENCODING SPACE REPORT - Step {step}
 {'='*50}
 Current Encoding Space Size: {space_size:.6f}
+Minimum Jacobian Rank: {float(min_rank)}
 Change from start: {change_percent:+.2f}%
 Trend: {trend}
 

@@ -3,14 +3,14 @@ defaults:
     - _self_
 
 # environment
-task: cheetah-run
+task: hopper-hop
 obs: rgb
 episodic: false
 
 # evaluation
 checkpoint: ???
 eval_episodes: 10
-eval_freq: 25000
+eval_freq: 2500
 
 # training
 steps: 350_000
@@ -35,7 +35,7 @@ discount_min: 0.95
 discount_max: 0.995
 buffer_size: 1_000_000
 q_sample_ratio: 0.5  # Ratio of buffer data visible to Q-function training (0.0-1.0)
-exp_name: PortionGradFromQ_rgb_no_linear_no_simnorm
+exp_name: GradFromQ_rgb_no_linear_no_simnorm_rank_monitor_Q05
 data_dir: ???
 JEPA_sg: false
 grad_from_Q: true

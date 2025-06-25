@@ -26,7 +26,7 @@ class Buffer():
 		self._num_eps = 0
 		
 		# Q-function sampling mask parameters
-		self._q_sample_ratio = getattr(cfg, 'q_sample_ratio', 1.0)
+		self._q_sample_ratio = self.cfg.q_sample_ratio
 		self._q_mask = None
 		self._q_mask_episodes = 0
 
