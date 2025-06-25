@@ -27,8 +27,8 @@ class TDMPC2(torch.nn.Module):
 			{'params': self.model._reward.parameters()},
 			{'params': self.model._termination.parameters() if self.cfg.episodic else []},
 			{'params': self.model._Qs.parameters()},
-			{'params': self.model._task_emb.parameters() if self.cfg.multitask else []
-			 }
+			{'params': self.model._task_emb.parameters() if self.cfg.multitask else []},
+			{'params': self.model._collapse_pred.parameters() if hasattr(self.model, '_collapse_pred') and self.model._collapse_pred is not None else []}
 		], lr=self.cfg.lr, capturable=True)
 		self.pi_optim = torch.optim.Adam(self.model._pi.parameters(), lr=self.cfg.lr, eps=1e-5, capturable=True)
 		self.model.eval()
@@ -329,6 +329,16 @@ class TDMPC2(torch.nn.Module):
 			termination_loss = F.binary_cross_entropy_with_logits(termination_pred, terminated)
 		else:
 			termination_loss = 0.
+
+		# Collapse prevention loss using random function predictor
+		collapse_prevention_coef = getattr(self.cfg, 'collapse_prevention_coef', 0.0)
+		if collapse_prevention_coef > 0 and self.model._collapse_pred is not None and self.model._random_fn is not None:
+			random_target = self.model._random_fn(obs[0]).detach()
+			pred_target = self.model._collapse_pred(zs[0])
+			collapse_loss = F.mse_loss(pred_target, random_target)
+		else:
+			collapse_loss = 0.0
+
 		value_loss = value_loss / (self.cfg.horizon * self.cfg.num_q)
 		
 		# Compute policy loss
@@ -391,7 +401,8 @@ class TDMPC2(torch.nn.Module):
 			self.cfg.reward_coef * reward_loss +
 			self.cfg.termination_coef * termination_loss +
 			self.cfg.value_coef * value_loss +
-			self.cfg.pi_coef * pi_loss  # Add policy loss to total
+			self.cfg.pi_coef * pi_loss +  # Add policy loss to total
+			collapse_prevention_coef * torch.as_tensor(collapse_loss, device=self.device)
 		)
 
 		if self.cfg.ortho_reg:
@@ -423,6 +434,7 @@ class TDMPC2(torch.nn.Module):
 			"value_loss": value_loss,
 			"termination_loss": termination_loss,
 			"total_loss": total_loss,
+			"collapse_loss": torch.as_tensor(collapse_loss, device=self.device),
 			"grad_norm": grad_norm,
 			"pi_loss": pi_loss,
 			"pi_grad_norm": pi_grad_norm,

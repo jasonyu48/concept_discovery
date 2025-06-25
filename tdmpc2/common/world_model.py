@@ -9,6 +9,46 @@ from tensordict import TensorDict
 from tensordict.nn import TensorDictParams
 
 
+class RandomPatchTransformer(nn.Module):
+	"""Random Transformer Encoder on image patches.
+	Takes input images of shape (B, C, 64, 64) and returns a representation
+	of dimension ``d_model``. All parameters are frozen (requires_grad=False).
+	"""
+	def __init__(self, in_channels: int, patch_size: int, d_model: int):
+		super().__init__()
+		self.patch_size = patch_size
+		self.unfold = nn.Unfold(kernel_size=patch_size, stride=patch_size)
+		self.proj = nn.Linear(in_channels * patch_size * patch_size, d_model)
+		encoder_layer = nn.TransformerEncoderLayer(
+			d_model=d_model,
+			nhead=1,
+			dim_feedforward=2 * d_model,
+			dropout=0.0,
+			norm_first=False,
+			batch_first=True,
+		)
+		self.encoder = nn.TransformerEncoder(encoder_layer, num_layers=1, norm=None)
+
+		# Freeze parameters
+		for p in self.parameters():
+			p.requires_grad = False
+		self.eval()
+
+	def forward(self, x: torch.Tensor) -> torch.Tensor:
+		"""Forward pass.
+		Args:
+			x: Tensor of shape (B, C, 64, 64)
+		Returns:
+			Tensor of shape (B, d_model)
+		"""
+		B, C, H, W = x.shape
+		assert H == 64 and W == 64, "RandomPatchTransformer expects 64x64 input size"
+		tokens = self.unfold(x).transpose(1, 2)  # (B, N_patches, patch_dim)
+		tokens = self.proj(tokens)  # (B, N_patches, d_model)
+		tokens = self.encoder(tokens)  # (B, N_patches, d_model)
+		return tokens.mean(dim=1)
+
+
 class WorldModel(nn.Module):
 	"""
 	TD-MPC2 implicit world model architecture.
@@ -35,6 +75,14 @@ class WorldModel(nn.Module):
 		else:
 			self._pi = layers.mlp(cfg.latent_dim + cfg.task_dim, 2*[cfg.mlp_dim], 2*cfg.action_dim)
 		self._Qs = layers.Ensemble([layers.mlp(cfg.latent_dim + cfg.action_dim + cfg.task_dim, 2*[cfg.mlp_dim], max(cfg.num_bins, 1), dropout=cfg.dropout) for _ in range(cfg.num_q)])
+		# Collapse prevention modules
+		if hasattr(cfg, 'collapse_prevention_dim'):
+			self._collapse_pred = layers.mlp(cfg.latent_dim, 2*[cfg.mlp_dim], cfg.collapse_prevention_dim)
+			in_channels = cfg.obs_shape['rgb'][0] if 'rgb' in cfg.obs_shape else cfg.obs_shape['state'][0]
+			self._random_fn = RandomPatchTransformer(in_channels, patch_size=8, d_model=cfg.collapse_prevention_dim)
+		else:
+			self._collapse_pred = None
+			self._random_fn = None
 		self.apply(init.weight_init)
 		init.zero_([self._reward[-1].weight, self._Qs.params["2", "weight"]])
 
