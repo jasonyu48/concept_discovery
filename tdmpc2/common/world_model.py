@@ -178,7 +178,23 @@ class WorldModel(nn.Module):
 		if self.cfg.multitask:
 			obs = self.task_emb(obs, task)
 		if self.cfg.obs == 'rgb' and obs.ndim == 5:
-			return torch.stack([self._encoder[self.cfg.obs](o) for o in obs])
+			# Original (inefficient) implementation iterates over the first axis:
+			#   torch.stack([self._encoder[self.cfg.obs](o) for o in obs])
+			# That runs the encoder `obs.shape[0]` times.  Instead, merge the first
+			# dimension into the batch dimension so we can perform a single forward
+			# pass and then reshape the output back to the original structure.
+			#
+			# Expected input shape: (T, B, C, H, W)  – here T can be any leading
+			# dimension (e.g. temporal horizon).  The conv encoder expects (N, C, H, W).
+			#
+			# 1. Flatten the first two dims → (T*B, C, H, W)
+			leading_dims = obs.shape[:2]  # (T, B) or similar
+			flat_obs = obs.reshape(-1, *obs.shape[-3:])
+			# 2. Single forward pass through the RGB encoder
+			flat_enc = self._encoder[self.cfg.obs](flat_obs)
+			# 3. Restore the original leading dimensions → (T, B, latent_dim)
+			enc = flat_enc.reshape(*leading_dims, -1)
+			return enc
 		return self._encoder[self.cfg.obs](obs)
 
 	def next(self, z, a, task):

@@ -44,7 +44,6 @@ class SimpleEncodingSpaceMonitor:
         self.monitoring_data = {
             'steps': [],
             'encoding_space_size': [],  # Only this metric
-            'encoding_values': [],      # Store actual encoding values for analysis
             'min_jacobian_rank': [],    # New: track minimum Jacobian rank
             'timestamp': []
         }
@@ -163,7 +162,6 @@ class SimpleEncodingSpaceMonitor:
         # Store initial measurement in monitoring data
         self.monitoring_data['steps'].append(0)
         self.monitoring_data['encoding_space_size'].append(initial_space_size)
-        self.monitoring_data['encoding_values'].append(self.baseline_encodings.cpu().numpy().copy())
         self.monitoring_data['min_jacobian_rank'].append(initial_min_rank)
         self.monitoring_data['timestamp'].append(time.time())
         
@@ -195,12 +193,11 @@ class SimpleEncodingSpaceMonitor:
         """Update baseline encodings with current encoder state"""
         with torch.no_grad():
             # Handle both single-task and multi-task encoders
-            if hasattr(self.encoder, 'encode'):
-                # Multi-task encoder
-                task = torch.zeros(self.baseline_observations.shape[0], self.cfg.task_dim).to(self.device)
-                self.baseline_encodings = self.encoder.encode(self.baseline_observations, task)
+            if self.cfg.multitask:
+                raise NotImplementedError("monitor not implemented for multi-task encoders")
             else:
                 # Single-task encoder (direct call)
+                print(f"🔍 Updating baseline encodings with single-task encoder")
                 self.baseline_encodings = self.encoder(self.baseline_observations)
     
     def pairwise_distance(self, encodings: torch.Tensor) -> torch.Tensor:
@@ -284,7 +281,6 @@ class SimpleEncodingSpaceMonitor:
         # Update monitoring data
         self.monitoring_data['steps'].append(step)
         self.monitoring_data['encoding_space_size'].append(space_size)
-        self.monitoring_data['encoding_values'].append(self.baseline_encodings.cpu().numpy().copy())
         self.monitoring_data['min_jacobian_rank'].append(min_rank)
         self.monitoring_data['timestamp'].append(time.time())
         
@@ -310,35 +306,24 @@ class SimpleEncodingSpaceMonitor:
         return metrics
     
     def save_monitoring_data(self):
-        """Save monitoring data to disk"""
-        # 1) Pickle (original)
-        pkl_path = self.save_dir / "simple_monitoring_data.pkl"
-        with open(pkl_path, 'wb') as f:
-            pickle.dump(self.monitoring_data, f)
+        """Save monitoring data"""
+        json_path = self.save_dir / "monitoring_data.json"
+        with open(json_path, "w") as fj:
+            json.dump({k: self._to_serializable(v) for k, v in self.monitoring_data.items()}, fj, indent=2)
+        print(f"💾 Saved monitoring data to {json_path}")
 
-        # 2) JSON for easy inspection in editors like VSCode
-        try:
-
-            def _to_serializable(obj):
-                """Convert obj to a JSON-serialisable form."""
-                if isinstance(obj, (int, float, str, bool)) or obj is None:
-                    return obj
-                if isinstance(obj, (list, tuple)):
-                    return [_to_serializable(o) for o in obj]
-                if isinstance(obj, dict):
-                    return {k: _to_serializable(v) for k, v in obj.items()}
-                if isinstance(obj, (torch.Tensor, np.ndarray)):
-                    return obj.tolist()
-                # Fallback: string representation
-                return str(obj)
-
-            json_path = self.save_dir / "simple_monitoring_data.json"
-            with open(json_path, "w") as fj:
-                json.dump({k: _to_serializable(v) for k, v in self.monitoring_data.items()}, fj, indent=2)
-
-            print(f"💾 Saved monitoring data to {json_path}")
-        except Exception as e:
-            print(f"⚠️ Failed to save JSON monitoring data: {e}")
+    def _to_serializable(self, obj):
+            """Convert obj to a JSON-serialisable form."""
+            if isinstance(obj, (int, float, str, bool)) or obj is None:
+                return obj
+            if isinstance(obj, (list, tuple)):
+                return [self._to_serializable(o) for o in obj]
+            if isinstance(obj, dict):
+                return {k: self._to_serializable(v) for k, v in obj.items()}
+            if isinstance(obj, (torch.Tensor, np.ndarray)):
+                return obj.tolist()
+            # Fallback: string representation
+            return str(obj)
     
     def _save_model_checkpoint(self, step: int):
         """Save model checkpoint to same path (overwrites previous)"""
