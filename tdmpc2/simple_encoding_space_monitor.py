@@ -118,14 +118,7 @@ class SimpleEncodingSpaceMonitor:
                 print(f"🎲 Initial min rank of random function Jacobian: {random_rank}")
         else:
             initial_rand_mag = None
-        # -------------------------------------------------------------
         
-        # Generate GIFs immediately after creating baseline observations
-        print("🎬 Rendering baseline observation GIFs...")
-        self.save_observation_gifs(max_gifs=5)
-        
-        return self.baseline_observations
-    
     def _generate_baseline_observations(self):
         """Generate diverse baseline observations using different seeds with consecutive frames"""
         print("🌱 Generating baseline diverse observations with consecutive frames...")
@@ -215,10 +208,13 @@ class SimpleEncodingSpaceMonitor:
         print(f"   Final shape: {self.baseline_observations.shape}")
         print(f"   Each observation contains 3 consecutive frames from random actions")
         
-        # Compute initial baseline encodings and return
+        # Compute initial baseline encodings
         self._update_baseline_encodings()
-        return self.baseline_observations
-    
+        
+        # Generate GIFs immediately after creating baseline observations
+        print("🎬 Rendering baseline observation GIFs...")
+        self.save_observation_gifs(max_gifs=5)
+        
     def _update_baseline_encodings(self):
         """Update baseline encodings with current encoder state"""
         with torch.no_grad():
