@@ -13,6 +13,12 @@ import time
 import imageio
 import json
 
+# RankMe metric
+try:
+    from reptrix import rankme
+except ImportError:
+    rankme = None  # Will raise later if used without installation
+
 class SimpleEncodingSpaceMonitor:
     """
     Simplified encoder monitoring - only tracks encoding space size
@@ -45,6 +51,7 @@ class SimpleEncodingSpaceMonitor:
             'steps': [],
             'encoding_space_size': [],  # Only this metric
             'min_jacobian_rank': [],    # New: track minimum Jacobian rank
+            'rankme': [],               # New
             'timestamp': []
         }
         
@@ -58,6 +65,66 @@ class SimpleEncodingSpaceMonitor:
         print(f"   - Monitoring frequency: every {self.monitor_freq} steps")
         print(f"   - Seed observations: {self.num_seed_obs}")
         print(f"   - Save directory: {self.save_dir}")
+        
+        # -------------------------------------------------------------
+        # RankMe setup
+        # -------------------------------------------------------------
+        self.rankme_samples = getattr(self.cfg, 'rankme_samples', 30000)
+        self.rankme_batch_size = 4096
+        default_rankme_path = f"/scratch/tshu2/jyu197/obs_data/{getattr(self.cfg, 'task', 'unknown')}/obs/observations.pt"
+        self.rankme_obs_path = Path(getattr(self.cfg, 'rankme_obs_path', default_rankme_path))
+        self._rankme_observations = None  # Lazy loaded
+        
+        # Calculate and save initial encoding space size
+        initial_space_size = self.pairwise_distance(self.baseline_encodings).mean().item()
+        print(f"📏 Initial encoding space size: {initial_space_size:.6f}")
+
+        # Calculate initial minimum Jacobian rank
+        initial_min_rank = self.compute_min_jacobian_rank(self.baseline_observations)
+        print(f"🔢 Initial min rank of encoder Jacobian: {initial_min_rank}")
+
+        # Compute initial RankMe
+        if rankme is not None and self.rankme_obs_path.exists():
+            try:
+                initial_rankme = self.compute_rankme_metric()
+                print(f"🔢 Initial RankMe: {initial_rankme:.2f}")
+            except Exception as e:
+                print(f"⚠️ Failed to compute initial RankMe: {e}")
+                initial_rankme = None
+        else:
+            print("⚠️ RankMe observations not found or reptrix not installed; RankMe metric disabled for now.")
+            initial_rankme = None
+
+        # Store initial measurement in monitoring data
+        self.monitoring_data['steps'].append(0)
+        self.monitoring_data['encoding_space_size'].append(initial_space_size)
+        self.monitoring_data['min_jacobian_rank'].append(initial_min_rank)
+        self.monitoring_data['rankme'].append(initial_rankme)
+        self.monitoring_data['timestamp'].append(time.time())
+        
+        # --- Collapse prevention: measure initial random function magnitude ---
+        if getattr(self.cfg, 'collapse_prevention', False) and hasattr(self.agent.model, '_random_fn') and self.agent.model._random_fn is not None:
+            with torch.no_grad():
+                obs = self.baseline_observations.to(self.device)
+                random_out = self.agent.model._random_fn(obs)
+                initial_rand_mag = random_out.abs().mean().item()
+                random_dist = self.pairwise_distance(random_out).min().item()
+                random_rank = self.compute_min_jacobian_rank(self.baseline_observations, model=self.agent.model._random_fn)
+                self.monitoring_data.setdefault('random_fn_magnitude', []).append(initial_rand_mag)
+                self.monitoring_data.setdefault('random_fn_min_distance', []).append(random_dist)
+                self.monitoring_data.setdefault('random_fn_min_rank', []).append(random_rank)
+                print(f"🎲 Initial random function |output| mean: {initial_rand_mag:.6f}")
+                print(f"🎲 Initial random function min pairwise distance: {random_dist:.6f}")
+                print(f"🎲 Initial min rank of random function Jacobian: {random_rank}")
+        else:
+            initial_rand_mag = None
+        # -------------------------------------------------------------
+        
+        # Generate GIFs immediately after creating baseline observations
+        print("🎬 Rendering baseline observation GIFs...")
+        self.save_observation_gifs(max_gifs=5)
+        
+        return self.baseline_observations
     
     def _generate_baseline_observations(self):
         """Generate diverse baseline observations using different seeds with consecutive frames"""
@@ -148,45 +215,8 @@ class SimpleEncodingSpaceMonitor:
         print(f"   Final shape: {self.baseline_observations.shape}")
         print(f"   Each observation contains 3 consecutive frames from random actions")
         
-        # Compute initial baseline encodings
+        # Compute initial baseline encodings and return
         self._update_baseline_encodings()
-        
-        # Calculate and save initial encoding space size
-        initial_space_size = self.pairwise_distance(self.baseline_encodings).mean().item()
-        print(f"📏 Initial encoding space size: {initial_space_size:.6f}")
-
-        # Calculate initial minimum Jacobian rank
-        initial_min_rank = self.compute_min_jacobian_rank(self.baseline_observations)
-        print(f"🔢 Initial min rank of encoder Jacobian: {initial_min_rank}")
-
-        # Store initial measurement in monitoring data
-        self.monitoring_data['steps'].append(0)
-        self.monitoring_data['encoding_space_size'].append(initial_space_size)
-        self.monitoring_data['min_jacobian_rank'].append(initial_min_rank)
-        self.monitoring_data['timestamp'].append(time.time())
-        
-        # --- Collapse prevention: measure initial random function magnitude ---
-        if getattr(self.cfg, 'collapse_prevention', False) and hasattr(self.agent.model, '_random_fn') and self.agent.model._random_fn is not None:
-            with torch.no_grad():
-                obs = self.baseline_observations.to(self.device)
-                random_out = self.agent.model._random_fn(obs)
-                initial_rand_mag = random_out.abs().mean().item()
-                random_dist = self.pairwise_distance(random_out).min().item()
-                random_rank = self.compute_min_jacobian_rank(self.baseline_observations, model=self.agent.model._random_fn)
-                self.monitoring_data.setdefault('random_fn_magnitude', []).append(initial_rand_mag)
-                self.monitoring_data.setdefault('random_fn_min_distance', []).append(random_dist)
-                self.monitoring_data.setdefault('random_fn_min_rank', []).append(random_rank)
-                print(f"🎲 Initial random function |output| mean: {initial_rand_mag:.6f}")
-                print(f"🎲 Initial random function min pairwise distance: {random_dist:.6f}")
-                print(f"🎲 Initial min rank of random function Jacobian: {random_rank}")
-        else:
-            initial_rand_mag = None
-        # -------------------------------------------------------------
-        
-        # Generate GIFs immediately after creating baseline observations
-        print("🎬 Rendering baseline observation GIFs...")
-        self.save_observation_gifs(max_gifs=5)
-        
         return self.baseline_observations
     
     def _update_baseline_encodings(self):
@@ -271,22 +301,34 @@ class SimpleEncodingSpaceMonitor:
         # Compute minimum Jacobian rank
         min_rank = self.compute_min_jacobian_rank(self.baseline_observations)
         
+        # Compute RankMe metric if available
+        rankme_metric = None
+        if rankme is not None and self.rankme_obs_path.exists():
+            try:
+                rankme_metric = self.compute_rankme_metric()
+            except Exception as e:
+                print(f"⚠️ Failed to compute RankMe: {e}")
+        
         # Store results (simplified)
         metrics = {
             'step': step,
             'encoding_space_size': space_size,
             'min_jacobian_rank': float(min_rank),  # cast to float for downstream reductions
+            'rankme': rankme_metric,
         }
         
         # Update monitoring data
         self.monitoring_data['steps'].append(step)
         self.monitoring_data['encoding_space_size'].append(space_size)
         self.monitoring_data['min_jacobian_rank'].append(min_rank)
+        self.monitoring_data['rankme'].append(rankme_metric)
         self.monitoring_data['timestamp'].append(time.time())
         
         # Print summary
         print(f"   Encoding space size: {space_size:.6f}")
         print(f"   Minimum Jacobian rank: {float(min_rank)}")
+        if rankme_metric is not None:
+            print(f"   RankMe: {rankme_metric:.2f}")
         # print(f"   Monitoring took {metrics['monitoring_time']:.2f}s")
         
         # Auto-save periodically and generate updated plots
@@ -294,7 +336,7 @@ class SimpleEncodingSpaceMonitor:
             self.save_monitoring_data()
             # Generate updated encoding space curve plot
             try:
-                self.plot_encoding_space_curve(save_plot=True)
+                self.plot_monitoring_curves(save_plot=True)
                 print(f"   ✅ Updated encoding space curve saved!")
             except Exception as e:
                 print(f"   ⚠️ Failed to generate encoding space curve: {e}")
@@ -342,51 +384,112 @@ class SimpleEncodingSpaceMonitor:
             print(f"   ⚠️ Failed to save model checkpoint: {e}")
 
     
-    def plot_encoding_space_curve(self, save_plot: bool = True):
-        """Create simple plot showing encoding space size over time"""
+    def plot_monitoring_curves(self, save_plot: bool = True):
+        """Generate a 2x2 panel plot of metrics: encoding size, min rank, RankMe, eval reward."""
         if not self.monitoring_data['steps']:
             print("No monitoring data to plot")
             return None
         
-        plt.figure(figsize=(12, 6))
+        plt.figure(figsize=(14, 10))
+
         steps = np.array(self.monitoring_data['steps'])
         space_sizes = np.array(self.monitoring_data['encoding_space_size'])
         ranks = np.array(self.monitoring_data['min_jacobian_rank'])
-        
-        # Main plot: encoding space size
-        plt.subplot(1, 2, 1)
-        plt.plot(steps, space_sizes, 'b-o', linewidth=2, markersize=4)
-        plt.title('Encoding Space Size Over Training', fontsize=14, fontweight='bold')
-        plt.xlabel('Training Steps')
-        plt.ylabel('Avg. Pairwise Distance')
-        plt.grid(True, alpha=0.3)
-        
-        # Statistics annotation
-        if len(space_sizes) > 1:
-            initial_size = space_sizes[0]
-            current_size = space_sizes[-1]
-            change_percent = ((current_size - initial_size) / initial_size) * 100
-            plt.text(0.02, 0.98,
-                     f'Initial: {initial_size:.4f}\nCurrent: {current_size:.4f}\nChange: {change_percent:+.1f}%',
-                     transform=plt.gca().transAxes, verticalalignment='top',
-                     bbox=dict(boxstyle='round', facecolor='wheat', alpha=0.8))
-        
-        # Right subplot: minimum Jacobian rank curve
-        plt.subplot(1, 2, 2)
-        plt.plot(steps, ranks, 'g-o', linewidth=2, markersize=4)
-        plt.title('Minimum Jacobian Rank Over Training', fontsize=14, fontweight='bold')
-        plt.xlabel('Training Steps')
-        plt.ylabel('Rank')
-        plt.grid(True, alpha=0.3)
-        
+        rankmes = np.array([m if m is not None else np.nan for m in self.monitoring_data['rankme']])
+
+        # Subplot 1: encoding space size
+        ax1 = plt.subplot(2, 2, 1)
+        ax1.plot(steps, space_sizes, 'b-o', linewidth=2, markersize=4)
+        ax1.set_title('Encoding Space Size', fontsize=12, fontweight='bold')
+        ax1.set_xlabel('Training Steps')
+        ax1.set_ylabel('Avg. Pairwise Distance')
+        ax1.grid(True, alpha=0.3)
+
+        # Subplot 2: min Jacobian rank
+        ax2 = plt.subplot(2, 2, 2)
+        ax2.plot(steps, ranks, 'g-o', linewidth=2, markersize=4)
+        ax2.set_title('Minimum Jacobian Rank', fontsize=12, fontweight='bold')
+        ax2.set_xlabel('Training Steps')
+        ax2.set_ylabel('Rank')
+        ax2.grid(True, alpha=0.3)
+
+        # Subplot 3: RankMe
+        if not np.all(np.isnan(rankmes)):
+            ax3 = plt.subplot(2, 2, 3)
+            ax3.plot(steps, rankmes, 'm-o', linewidth=2, markersize=4)
+            ax3.set_title('RankMe', fontsize=12, fontweight='bold')
+            ax3.set_xlabel('Training Steps')
+            ax3.set_ylabel('RankMe')
+            ax3.grid(True, alpha=0.3)
+
+        # Subplot 4: Eval reward (from CSV)
+        eval_csv = Path(self.cfg.work_dir) / 'eval.csv' if hasattr(self.cfg, 'work_dir') else None
+        if eval_csv is not None and eval_csv.exists():
+            try:
+                import pandas as pd
+                eval_df = pd.read_csv(eval_csv)
+                if 'step' in eval_df.columns and 'reward' in eval_df.columns:
+                    ax4 = plt.subplot(2, 2, 4)
+                    ax4.plot(eval_df['step'], eval_df['reward'], 'c-')
+                    ax4.set_title('Eval Reward', fontsize=12, fontweight='bold')
+                    ax4.set_xlabel('Training Steps')
+                    ax4.set_ylabel('Reward')
+                    ax4.grid(True, alpha=0.3)
+            except Exception as e:
+                print(f"⚠️ Failed to load eval.csv for plotting: {e}")
+
         plt.tight_layout()
-        
+
         if save_plot:
-            plot_path = self.save_dir / "encoding_space_curve.png"
+            plot_path = self.save_dir / "monitoring_curves.png"
             plt.savefig(plot_path, dpi=300, bbox_inches='tight')
-            print(f"📊 Saved encoding space curve to {plot_path}")
-        
+            print(f"📊 Saved monitoring curves to {plot_path}")
+
         return plt.gcf()
+
+    # -------------------------------------------------------------
+    # RankMe computation
+    # -------------------------------------------------------------
+    def _get_rankme_observations(self) -> torch.Tensor:
+        """Lazy-load observations for RankMe from file and cache the tensor."""
+        if self._rankme_observations is not None:
+            return self._rankme_observations
+
+        if not self.rankme_obs_path.exists():
+            raise FileNotFoundError(f"RankMe observation file not found: {self.rankme_obs_path}")
+
+        obs_tensor = torch.load(self.rankme_obs_path, map_location='cpu')  # shape (N, C, H, W)
+        if obs_tensor.ndim < 3:
+            raise ValueError(f"Unexpected observation tensor shape: {obs_tensor.shape}")
+
+        self._rankme_observations = obs_tensor.float()  # Keep on CPU to avoid extra GPU mem
+        print(f"📥 Loaded RankMe observations: {self._rankme_observations.shape}")
+        return self._rankme_observations
+
+    def compute_rankme_metric(self) -> float:
+        """Compute RankMe over a subset of saved observations."""
+        if rankme is None:
+            raise RuntimeError("reptrix not installed – cannot compute RankMe")
+
+        obs_tensor = self._get_rankme_observations()
+        num_samples = min(self.rankme_samples, obs_tensor.shape[0])
+        # Random but deterministic sample (seed fixed)
+        idx = torch.randperm(obs_tensor.shape[0], device='cpu')[:num_samples]
+        obs_sample = obs_tensor[idx].to(self.device)  # Move once to GPU
+
+        # Encode in large batches on GPU
+        encodings = []
+        with torch.no_grad():
+            for i in range(0, num_samples, self.rankme_batch_size):
+                batch = obs_sample[i:i+self.rankme_batch_size]
+                if self.cfg.multitask:
+                    raise NotImplementedError("RankMe not implemented for multi-task encoders")
+                enc = self.encoder(batch)
+                encodings.append(enc.cpu())
+        encodings = torch.cat(encodings, dim=0)
+
+        metric_val = rankme.get_rankme(encodings)
+        return float(metric_val)
     
     def generate_simple_report(self) -> str:
         """Generate a simple text report focusing on encoding space"""

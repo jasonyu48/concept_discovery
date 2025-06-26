@@ -30,6 +30,29 @@ class Buffer():
 		self._q_mask = None
 		self._q_mask_episodes = 0
 
+		# ---------------------------------------------------------------------
+		# Observation collection for RankMe / representation analysis
+		# ---------------------------------------------------------------------
+		# Users can enable this by setting `save_obs_for_rankme=True` in cfg.
+		# The monitor will save the *first* `obs_save_max_samples` observations
+		# that enter the replay buffer (across *all* timesteps and episodes).
+		# When the quota is reached, they are written to disk once and freed
+		# from memory to minimise overhead during training.
+		self._obs_collect_enabled = getattr(cfg, 'save_obs_for_rankme', False)
+		self._obs_save_limit = int(getattr(cfg, 'obs_save_max_samples', 30000))
+		if self._obs_collect_enabled:
+			from pathlib import Path
+			# Default save directory as requested: /scratch/tshu2/jyu197/obs_data/{task}/{exp_name}
+			default_dir = f"/scratch/tshu2/jyu197/obs_data/{getattr(cfg, 'task', 'unknown')}/{cfg.exp_name}"
+			_obs_dir = Path(getattr(cfg, 'obs_save_dir', default_dir))
+			_obs_dir.mkdir(parents=True, exist_ok=True)
+			self._obs_save_path = _obs_dir / "observations.pt"
+			self._obs_buffer = []  # Temporarily holds collected observations
+			self._obs_saved = 0
+			print(f"[Buffer] Observation collection ENABLED – will save the first {self._obs_save_limit:,} observations to {self._obs_save_path}")
+		else:
+			self._obs_save_path = None
+
 	@property
 	def capacity(self):
 		"""Return the capacity of the buffer."""
@@ -85,6 +108,10 @@ class Buffer():
 		self._buffer.extend(td)
 		self._num_eps += num_new_eps
 		
+		# Observation collection when bulk loading data
+		if self._obs_collect_enabled and self._obs_saved < self._obs_save_limit:
+			self._collect_observations(td.get('obs', None))
+		
 		# Update Q-function mask when new episodes are added
 		self._update_q_mask_on_new_episodes()
 		
@@ -97,6 +124,12 @@ class Buffer():
 			self._buffer = self._init(td)
 		self._buffer.extend(td)
 		self._num_eps += 1
+		
+		# -------------------------------------------------------------
+		# Observation collection (per-episode) – BEFORE any early exit.
+		# -------------------------------------------------------------
+		if self._obs_collect_enabled and self._obs_saved < self._obs_save_limit:
+			self._collect_observations(td.get('obs', None))
 		
 		# Update Q-function mask when new episode is added
 		self._update_q_mask_on_new_episodes()
@@ -216,3 +249,51 @@ class Buffer():
 	def q_visible_episodes(self):
 		"""Return the number of episodes visible to Q-function training."""
 		return self._q_mask_episodes if self._q_mask is not None else self._num_eps
+
+	# -----------------------------------------------------------------
+	# Observation collection helpers
+	# -----------------------------------------------------------------
+	def _collect_observations(self, obs_tensor):
+		"""Collect observations until the preset limit is reached.
+
+		Args:
+			obs_tensor (torch.Tensor or None): Tensor of observations with shape
+				(..., *obs_shape). If None, nothing is done.
+		"""
+		if obs_tensor is None:
+			return
+		if self._obs_saved >= self._obs_save_limit:
+			return  # Already finished
+
+		obs_cpu = obs_tensor.detach().cpu()
+
+		# Pixel observations typically have at least 4 dims (T,B,C,H,W) or (T,C,H,W).
+		# We want to flatten the leading dims (time, batch) but keep (C,H,W).
+		if obs_cpu.shape[-3:] == (9, 64, 64):
+			obs_cpu = obs_cpu.reshape(-1, *obs_cpu.shape[-3:])  # (-1, C, H, W)
+		else:
+			raise ValueError(f"Unknown observation shape: {obs_cpu.shape}")
+
+		# Determine how many we still need
+		remaining = self._obs_save_limit - self._obs_saved
+		obs_to_add = obs_cpu[:remaining]
+		self._obs_buffer.append(obs_to_add)
+		self._obs_saved += obs_to_add.shape[0]
+
+		if self._obs_saved >= self._obs_save_limit:
+			self._flush_observations_to_disk()
+
+	def _flush_observations_to_disk(self):
+		"""Save the collected observations to disk as a single torch file."""
+		if not self._obs_buffer or self._obs_save_path is None:
+			return
+		import torch
+		obs_cat = torch.cat(self._obs_buffer, dim=0)
+		try:
+			torch.save(obs_cat, self._obs_save_path)
+			print(f"[Buffer] ✅ Saved {obs_cat.shape[0]:,} observations to {self._obs_save_path}")
+		except Exception as e:
+			print(f"[Buffer] ⚠️ Failed to save observations: {e}")
+		finally:
+			# Free memory
+			self._obs_buffer = []
