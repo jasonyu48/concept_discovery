@@ -28,7 +28,7 @@ class TDMPC2(torch.nn.Module):
 			{'params': self.model._termination.parameters() if self.cfg.episodic else []},
 			{'params': self.model._Qs.parameters()},
 			{'params': self.model._task_emb.parameters() if self.cfg.multitask else []},
-			{'params': self.model._collapse_pred.parameters() if hasattr(self.model, '_collapse_pred') and self.model._collapse_pred is not None else []}
+			{'params': self.model._collapse_pred.parameters() if getattr(self.cfg, 'collapse_prevention', False) else []}
 		], lr=self.cfg.lr, capturable=True)
 		self.pi_optim = torch.optim.Adam(self.model._pi.parameters(), lr=self.cfg.lr, eps=1e-5, capturable=True)
 		self.model.eval()
@@ -300,7 +300,7 @@ class TDMPC2(torch.nn.Module):
 			_zs_r = _zs.detach()
 		reward_preds = self.model.reward(_zs_r, action, task)
 		if self.cfg.episodic:
-			if self.cfg.grad_from_Q or self.cfg.grad_from_R or self.cfg.grad_from_policy:
+			if self.cfg.grad_from_Q or self.cfg.grad_from_R or self.cfg.grad_from_policy or self.cfg.collapse_prevention:
 				termination_pred = self.model.termination(zs[1:].detach(), task, unnormalized=True)
 			else:
 				termination_pred = self.model.termination(zs[1:], task, unnormalized=True)
@@ -331,13 +331,22 @@ class TDMPC2(torch.nn.Module):
 			termination_loss = 0.
 
 		# Collapse prevention loss using random function predictor
-		collapse_prevention_coef = getattr(self.cfg, 'collapse_prevention_coef', 0.0)
-		if collapse_prevention_coef > 0 and self.model._collapse_pred is not None and self.model._random_fn is not None:
-			random_target = self.model._random_fn(obs[0]).detach()
-			pred_target = self.model._collapse_pred(zs[0])
-			collapse_loss = F.mse_loss(pred_target, random_target)
+		collapse_prevention_coef = self.cfg.collapse_prevention_coef
+		if self.cfg.collapse_prevention and collapse_prevention_coef > 0:
+			# Flatten time and batch dimensions to use the entire sequence
+			T_seq, B = obs.shape[0], obs.shape[1]
+			obs_flat = obs.view(-1, *obs.shape[2:]).to(dtype=torch.float32)  # ((T)*B, ...)
+			zs_flat = zs.view(-1, zs.shape[-1])                  # ((T)*B, latent_dim)
+			random_target = self.model._random_fn(obs_flat).detach()  # ((T)*B, D)
+			pred_target = self.model._collapse_pred(zs_flat)          # ((T)*B, D)
+			# Apply Q-sampling mask across batch dimension for every timestep
+			if q_mask is not None:
+				mask = q_mask.unsqueeze(0).expand(T_seq, B).reshape(-1)
+				pred_target = pred_target[mask]
+				random_target = random_target[mask]
+			collapse_loss = F.mse_loss(pred_target, random_target) / T_seq
 		else:
-			collapse_loss = 0.0
+			collapse_loss = torch.tensor(0.0, device=self.device)
 
 		value_loss = value_loss / (self.cfg.horizon * self.cfg.num_q)
 		
@@ -402,7 +411,7 @@ class TDMPC2(torch.nn.Module):
 			self.cfg.termination_coef * termination_loss +
 			self.cfg.value_coef * value_loss +
 			self.cfg.pi_coef * pi_loss +  # Add policy loss to total
-			collapse_prevention_coef * torch.as_tensor(collapse_loss, device=self.device)
+			collapse_prevention_coef * collapse_loss
 		)
 
 		if self.cfg.ortho_reg:
@@ -434,7 +443,7 @@ class TDMPC2(torch.nn.Module):
 			"value_loss": value_loss,
 			"termination_loss": termination_loss,
 			"total_loss": total_loss,
-			"collapse_loss": torch.as_tensor(collapse_loss, device=self.device),
+			"collapse_loss": collapse_loss,
 			"grad_norm": grad_norm,
 			"pi_loss": pi_loss,
 			"pi_grad_norm": pi_grad_norm,
@@ -476,4 +485,11 @@ class TDMPC2(torch.nn.Module):
 		# Run main update
 		update_info = self._update(obs, action, reward, terminated, q_mask=q_mask, **kwargs, step=step, pretrain_step=pretrain_step)
 		
+		# Compute visibility percentage
+		visible_percent = 100.0 * buffer.q_visible_episodes / max(buffer.num_eps, 1)
+		if step % self.cfg.monitor_freq == 0 and pretrain_step < 1:
+			print(f"Q-visible episodes: {buffer.q_visible_episodes}/{buffer.num_eps} ({visible_percent:.1f}%) -> sample_ratio: {self.cfg.q_sample_ratio}")
+		# Log metric
+		update_info["q_visible_percent"] = torch.tensor(visible_percent, device=self.device)
+
 		return update_info

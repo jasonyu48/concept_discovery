@@ -14,11 +14,12 @@ class RandomPatchTransformer(nn.Module):
 	Takes input images of shape (B, C, 64, 64) and returns a representation
 	of dimension ``d_model``. All parameters are frozen (requires_grad=False).
 	"""
-	def __init__(self, in_channels: int, patch_size: int, d_model: int):
+	def __init__(self, cfg: any, in_channels: int, patch_size: int, d_model: int):
 		super().__init__()
+		self.cfg = cfg
 		self.patch_size = patch_size
 		self.unfold = nn.Unfold(kernel_size=patch_size, stride=patch_size)
-		self.proj = nn.Linear(in_channels * patch_size * patch_size, d_model)
+		self.in_proj = nn.Linear(in_channels * patch_size * patch_size, d_model)
 		encoder_layer = nn.TransformerEncoderLayer(
 			d_model=d_model,
 			nhead=1,
@@ -28,6 +29,8 @@ class RandomPatchTransformer(nn.Module):
 			batch_first=True,
 		)
 		self.encoder = nn.TransformerEncoder(encoder_layer, num_layers=1, norm=None)
+		self.out_proj = nn.Linear(d_model, cfg.collapse_prevention_dim)
+		self.scale_factor = cfg.scale_factor
 
 		# Freeze parameters
 		for p in self.parameters():
@@ -43,10 +46,11 @@ class RandomPatchTransformer(nn.Module):
 		"""
 		B, C, H, W = x.shape
 		assert H == 64 and W == 64, "RandomPatchTransformer expects 64x64 input size"
-		tokens = self.unfold(x).transpose(1, 2)  # (B, N_patches, patch_dim)
-		tokens = self.proj(tokens)  # (B, N_patches, d_model)
-		tokens = self.encoder(tokens)  # (B, N_patches, d_model)
-		return tokens.mean(dim=1)
+		x = self.unfold(x).transpose(1, 2)  # (B, N_patches, patch_dim)
+		x = self.in_proj(x)  # (B, N_patches, d_model)
+		x = self.encoder(x)  # (B, N_patches, d_model)
+		x = self.out_proj(x.sum(dim=1)) * self.scale_factor
+		return x
 
 
 class WorldModel(nn.Module):
@@ -76,10 +80,10 @@ class WorldModel(nn.Module):
 			self._pi = layers.mlp(cfg.latent_dim + cfg.task_dim, 2*[cfg.mlp_dim], 2*cfg.action_dim)
 		self._Qs = layers.Ensemble([layers.mlp(cfg.latent_dim + cfg.action_dim + cfg.task_dim, 2*[cfg.mlp_dim], max(cfg.num_bins, 1), dropout=cfg.dropout) for _ in range(cfg.num_q)])
 		# Collapse prevention modules
-		if hasattr(cfg, 'collapse_prevention_dim'):
+		if getattr(cfg, 'collapse_prevention', False):
 			self._collapse_pred = layers.mlp(cfg.latent_dim, 2*[cfg.mlp_dim], cfg.collapse_prevention_dim)
 			in_channels = cfg.obs_shape['rgb'][0] if 'rgb' in cfg.obs_shape else cfg.obs_shape['state'][0]
-			self._random_fn = RandomPatchTransformer(in_channels, patch_size=8, d_model=cfg.collapse_prevention_dim)
+			self._random_fn = RandomPatchTransformer(cfg,in_channels, patch_size=8, d_model=128)
 		else:
 			self._collapse_pred = None
 			self._random_fn = None
@@ -115,6 +119,17 @@ class WorldModel(nn.Module):
 				continue
 			repr += f"{modules[i]}: {m}\n"
 		repr += "Learnable parameters: {:,}".format(self.total_params)
+		# add a comparison of the number of parameters of the frozen transformer vs encoder and _collapse_pred
+		if self.cfg.collapse_prevention:
+			frozen_params = sum(p.numel() for p in self._random_fn.parameters())
+			encoder_params = sum(p.numel() for p in self._encoder.parameters())
+			collapse_params = sum(p.numel() for p in self._collapse_pred.parameters())
+			repr += f"\nFrozen transformer params: {frozen_params:,}"
+			repr += f"\nEncoder + collapse_pred params: {encoder_params + collapse_params:,}"
+			if encoder_params + collapse_params < frozen_params:
+				repr += f"\n❌ encoder + collapse_pred is not expressive enough"
+			else:
+				repr += f"\n✅ encoder + collapse_pred is expressive enough"
 		return repr
 
 	@property

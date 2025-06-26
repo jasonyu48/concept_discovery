@@ -11,6 +11,7 @@ from pathlib import Path
 import pickle
 import time
 import imageio
+import json
 
 class SimpleEncodingSpaceMonitor:
     """
@@ -152,12 +153,12 @@ class SimpleEncodingSpaceMonitor:
         self._update_baseline_encodings()
         
         # Calculate and save initial encoding space size
-        initial_space_size = self.compute_encoding_space_size(self.baseline_encodings)
+        initial_space_size = self.pairwise_distance(self.baseline_encodings).mean().item()
         print(f"📏 Initial encoding space size: {initial_space_size:.6f}")
 
         # Calculate initial minimum Jacobian rank
         initial_min_rank = self.compute_min_jacobian_rank(self.baseline_observations)
-        print(f"🔢 Initial minimum Jacobian rank: {initial_min_rank}")
+        print(f"🔢 Initial min rank of encoder Jacobian: {initial_min_rank}")
 
         # Store initial measurement in monitoring data
         self.monitoring_data['steps'].append(0)
@@ -165,6 +166,24 @@ class SimpleEncodingSpaceMonitor:
         self.monitoring_data['encoding_values'].append(self.baseline_encodings.cpu().numpy().copy())
         self.monitoring_data['min_jacobian_rank'].append(initial_min_rank)
         self.monitoring_data['timestamp'].append(time.time())
+        
+        # --- Collapse prevention: measure initial random function magnitude ---
+        if getattr(self.cfg, 'collapse_prevention', False) and hasattr(self.agent.model, '_random_fn') and self.agent.model._random_fn is not None:
+            with torch.no_grad():
+                obs = self.baseline_observations.to(self.device)
+                random_out = self.agent.model._random_fn(obs)
+                initial_rand_mag = random_out.abs().mean().item()
+                random_dist = self.pairwise_distance(random_out).min().item()
+                random_rank = self.compute_min_jacobian_rank(self.baseline_observations, model=self.agent.model._random_fn)
+                self.monitoring_data.setdefault('random_fn_magnitude', []).append(initial_rand_mag)
+                self.monitoring_data.setdefault('random_fn_min_distance', []).append(random_dist)
+                self.monitoring_data.setdefault('random_fn_min_rank', []).append(random_rank)
+                print(f"🎲 Initial random function |output| mean: {initial_rand_mag:.6f}")
+                print(f"🎲 Initial random function min pairwise distance: {random_dist:.6f}")
+                print(f"🎲 Initial min rank of random function Jacobian: {random_rank}")
+        else:
+            initial_rand_mag = None
+        # -------------------------------------------------------------
         
         # Generate GIFs immediately after creating baseline observations
         print("🎬 Rendering baseline observation GIFs...")
@@ -184,8 +203,8 @@ class SimpleEncodingSpaceMonitor:
                 # Single-task encoder (direct call)
                 self.baseline_encodings = self.encoder(self.baseline_observations)
     
-    def compute_encoding_space_size(self, encodings: torch.Tensor) -> float:
-        """Compute average pairwise distance in encoding space (our main metric)"""
+    def pairwise_distance(self, encodings: torch.Tensor) -> torch.Tensor:
+        """Compute average pairwise distance in encoding space"""
         # Efficient pairwise distance computation
         # ||e_i - e_j||^2 = ||e_i||^2 + ||e_j||^2 - 2*e_i·e_j
         G = torch.mm(encodings, encodings.T)
@@ -198,24 +217,32 @@ class SimpleEncodingSpaceMonitor:
         triu_indices = torch.triu_indices(D2.shape[0], D2.shape[1], offset=1)
         distances = torch.sqrt(torch.clamp(D2[triu_indices[0], triu_indices[1]], min=0))
         
-        return distances.mean().item()
+        return distances
     
-    def compute_min_jacobian_rank(self, observations: torch.Tensor) -> int:
-        """Compute the minimum rank of the encoder Jacobian dE/dx over a batch.
+    def compute_min_jacobian_rank(self, observations: torch.Tensor, model: Optional[torch.nn.Module] = None) -> int:
+        """Compute the minimum rank of the Jacobian dF/dx over a batch.
+
+        Args:
+            observations: input batch (B, ...)
+            model: network to analyse. If None, defaults to the agent's encoder
+                   (the same behaviour as before).
+        Returns:
+            Minimum matrix rank across the batch.
         """
+        target_model = model if model is not None else self.encoder
+
         # Ensure the tensor has gradients enabled
         obs = observations.detach().clone().to(self.device).requires_grad_(True)
 
-        # Define a helper that returns encoder output for a *single* sample
-        if hasattr(self.encoder, 'encode'):
+        # Define a helper that returns output for a *single* sample
+        if model is None and hasattr(self.encoder, 'encode'):
+            # original path for agent encoder (multi-task case)
             def single_forward(x_single: torch.Tensor):
                 task = torch.zeros(1, self.cfg.task_dim, device=self.device)
-                # Add batch dim expected by encode, then squeeze back
                 return self.encoder.encode(x_single.unsqueeze(0), task).squeeze(0)
         else:
             def single_forward(x_single: torch.Tensor):
-                return self.encoder(x_single.unsqueeze(0)).squeeze(0)
-
+                return target_model(x_single.unsqueeze(0)).squeeze(0)
 
         jac_single = jacrev(single_forward)
         # vmap maps jac_single over the batch dimension of obs yielding
@@ -243,7 +270,7 @@ class SimpleEncodingSpaceMonitor:
         self._update_baseline_encodings()
         
         # Compute only the encoding space size
-        space_size = self.compute_encoding_space_size(self.baseline_encodings)
+        space_size = self.pairwise_distance(self.baseline_encodings).mean().item()
         # Compute minimum Jacobian rank
         min_rank = self.compute_min_jacobian_rank(self.baseline_observations)
         
@@ -284,10 +311,34 @@ class SimpleEncodingSpaceMonitor:
     
     def save_monitoring_data(self):
         """Save monitoring data to disk"""
-        save_path = self.save_dir / "simple_monitoring_data.pkl"
-        with open(save_path, 'wb') as f:
+        # 1) Pickle (original)
+        pkl_path = self.save_dir / "simple_monitoring_data.pkl"
+        with open(pkl_path, 'wb') as f:
             pickle.dump(self.monitoring_data, f)
-        print(f"💾 Saved monitoring data to {save_path}")
+
+        # 2) JSON for easy inspection in editors like VSCode
+        try:
+
+            def _to_serializable(obj):
+                """Convert obj to a JSON-serialisable form."""
+                if isinstance(obj, (int, float, str, bool)) or obj is None:
+                    return obj
+                if isinstance(obj, (list, tuple)):
+                    return [_to_serializable(o) for o in obj]
+                if isinstance(obj, dict):
+                    return {k: _to_serializable(v) for k, v in obj.items()}
+                if isinstance(obj, (torch.Tensor, np.ndarray)):
+                    return obj.tolist()
+                # Fallback: string representation
+                return str(obj)
+
+            json_path = self.save_dir / "simple_monitoring_data.json"
+            with open(json_path, "w") as fj:
+                json.dump({k: _to_serializable(v) for k, v in self.monitoring_data.items()}, fj, indent=2)
+
+            print(f"💾 Saved monitoring data to {json_path}")
+        except Exception as e:
+            print(f"⚠️ Failed to save JSON monitoring data: {e}")
     
     def _save_model_checkpoint(self, step: int):
         """Save model checkpoint to same path (overwrites previous)"""

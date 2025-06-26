@@ -38,8 +38,8 @@ discount_denom: 5
 discount_min: 0.95
 discount_max: 0.995
 buffer_size: 1_000_000
-q_sample_ratio: 1.0  # Ratio of buffer data visible to Q-function and collapse prevention training (0.0-1.0)
-exp_name: TEST
+q_sample_ratio: 0.1  # Ratio of buffer data visible to Q-function and collapse prevention training (0.0-1.0)
+exp_name: random_func_512_01
 data_dir: ???
 JEPA_sg: false
 grad_from_Q: false
@@ -51,7 +51,7 @@ compile: false
 save_video: true
 save_agent: true
 exist_tol: 1e-5
-seed: 2016
+seed: 2017
 monitor_freq: 2500
 full_rank: false
 simnorm: false
