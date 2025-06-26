@@ -2,6 +2,7 @@
 tdmpc2/logs/
 tdmpc2/outputs/
 tdmpc2/wandb/
+batch_train_logs/
 
 # HPC
 nautilus/*.yaml

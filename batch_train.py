@@ -24,6 +24,8 @@ import concurrent.futures
 from pathlib import Path
 from typing import List, Optional, Set
 import time
+import threading
+import datetime
 
 class BatchTrainer:
     def __init__(self, 
@@ -33,7 +35,7 @@ class BatchTrainer:
                  max_workers: int = 4,
                  dry_run: str = 'False'):
         
-        self.tasks = tasks or ['fish', 'hopper', 'walker', 'policy']
+        self.tasks = tasks
         self.parallel = parallel
         self.max_workers = max_workers
         self.dry_run = dry_run
@@ -128,34 +130,132 @@ class BatchTrainer:
         if self.dry_run == 'True':
             return task, config, "DRY_RUN", "Command printed only", 0
         
+        # Create logs directory if it doesn't exist
+        logs_dir = self.workspace_path / "batch_train_logs"
+        logs_dir.mkdir(exist_ok=True)
+        
+        # Create log file with timestamp
+        timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
+        log_file_path = logs_dir / f"{task}_{config}_{timestamp}.txt"
+        
         start_time = time.time()
         
         try:
-            # Run the training
-            result = subprocess.run(
+            # Start the process
+            process = subprocess.Popen(
                 cmd,
-                cwd=self.tdmpc2_path,  # Run from tdmpc2 directory for proper imports
-                capture_output=True,
+                cwd=self.tdmpc2_path,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.STDOUT,  # Merge stderr into stdout
                 text=True,
-                timeout=None  # No timeout for training
+                bufsize=1,  # Line buffered
+                universal_newlines=True
             )
+            
+            # Variables for output collection and periodic saving
+            output_buffer = []
+            buffer_lock = threading.Lock()  # Protect concurrent access to output_buffer
+            save_interval = 30  # Save every 30 seconds
+            process_finished = threading.Event()
+            
+            print(f"Saving output to: {log_file_path}")
+            print("Training output will be saved every 30 seconds...")
+            
+            # Thread for periodic saving
+            def periodic_save():
+                while not process_finished.wait(save_interval):  # Wait 30s or until process finishes
+                    with buffer_lock:
+                        if output_buffer:  # Only save if there's something to save
+                            lines_to_write = output_buffer.copy()
+                            output_buffer.clear()
+                        else:
+                            lines_to_write = None
+                    if lines_to_write:
+                        self._save_output_to_file(log_file_path, lines_to_write)
+            
+            # Start the periodic save thread
+            save_thread = threading.Thread(target=periodic_save, daemon=True)
+            save_thread.start()
+            
+            # Read output line by line (this blocks efficiently)
+            try:
+                for line in iter(process.stdout.readline, ''):
+                    if line:
+                        # Skip progress-bar updates to keep logs clean
+                        if self._is_progress_bar_line(line):
+                            continue
+
+                        # Add timestamp to each line and store in buffer
+                        current_time = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+                        timestamped_line = f"[{current_time}] {line.rstrip()}\n"
+                        with buffer_lock:
+                            output_buffer.append(timestamped_line)
+                        
+                        # Print to console as well for real-time monitoring
+                        # print(f"[{task}-{config}] {line.rstrip()}")
+            finally:
+                # Signal that process output reading is done
+                process_finished.set()
+            
+            # Save any remaining output
+            if output_buffer:
+                self._save_output_to_file(log_file_path, output_buffer)
+            
+            # Wait for process to complete and get return code
+            return_code = process.wait()
             
             end_time = time.time()
             duration = end_time - start_time
             
-            if result.returncode == 0:
+            # Add final summary to log file
+            summary_lines = [
+                f"\n{'='*60}\n",
+                f"Training completed at: {datetime.datetime.now()}\n",
+                f"Duration: {duration:.2f} seconds\n",
+                f"Return code: {return_code}\n",
+                f"{'='*60}\n"
+            ]
+            self._save_output_to_file(log_file_path, summary_lines, append=True)
+            
+            if return_code == 0:
                 status = "SUCCESS"
-                message = f"Training completed in {duration:.2f} seconds"
+                message = f"Training completed in {duration:.2f} seconds. Log: {log_file_path}"
             else:
                 status = "FAILED"
-                message = f"Training failed after {duration:.2f} seconds\nSTDERR: {result.stderr[-500:]}"  # Last 500 chars of stderr
+                message = f"Training failed after {duration:.2f} seconds. Log: {log_file_path}"
             
             return task, config, status, message, duration
             
-        except subprocess.TimeoutExpired:
-            return task, config, "TIMEOUT", "Training timed out", time.time() - start_time
         except Exception as e:
-            return task, config, "ERROR", f"Exception: {str(e)}", time.time() - start_time
+            end_time = time.time()
+            duration = end_time - start_time
+            
+            # Save error to log file if it exists
+            if 'log_file_path' in locals():
+                error_lines = [
+                    f"\n{'='*60}\n",
+                    f"ERROR occurred at: {datetime.datetime.now()}\n",
+                    f"Error: {str(e)}\n",
+                    f"Duration before error: {duration:.2f} seconds\n",
+                    f"{'='*60}\n"
+                ]
+                self._save_output_to_file(log_file_path, error_lines, append=True)
+                message = f"Exception: {str(e)}. Log: {log_file_path}"
+            else:
+                message = f"Exception: {str(e)}"
+            
+            return task, config, "ERROR", message, duration
+    
+    def _save_output_to_file(self, log_file_path: Path, output_lines: List[str], append: bool = True):
+        """Save output lines to the log file."""
+        mode = 'a' if append else 'w'
+        try:
+            with open(log_file_path, mode, encoding='utf-8') as f:
+                f.writelines(output_lines)
+            if not append:
+                output_lines.clear()  # Clear buffer after saving
+        except Exception as e:
+            print(f"Warning: Could not save to log file {log_file_path}: {e}")
     
     def run_all(self):
         """Run training for all task-config combinations."""
@@ -232,10 +332,19 @@ class BatchTrainer:
         total_time = sum(r[4] for r in results if r[4] > 0)
         print(f"\nTotal execution time: {total_time:.1f} seconds ({total_time/60:.1f} minutes)")
 
+    # ---------------------------------------------------------------------
+    # Helper utilities
+    # ---------------------------------------------------------------------
+
+    @staticmethod
+    def _is_progress_bar_line(line: str) -> bool:
+        """Return True if the line looks like a tqdm/progress-bar update."""
+        return ("it/s" in line)
+
 
 def main():
     parser = argparse.ArgumentParser(description='Batch training script for TD-MPC2')
-    parser.add_argument('--tasks', nargs='+', default=['policy'],
+    parser.add_argument('--tasks', nargs='+', default=['random_func'],
                        help='List of tasks to run')
     parser.add_argument('--configs', nargs='+', default=None,
                        help='List of config variants to run (if not provided, will auto-discover from task directories)')
