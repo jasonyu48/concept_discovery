@@ -129,7 +129,7 @@ def mlp(in_dim, mlp_dims, out_dim, act=None, dropout=0.):
 	mlp = nn.ModuleList()
 	for i in range(len(dims) - 2):
 		mlp.append(NormedLinear(dims[i], dims[i+1], dropout=dropout*(i==0)))
-	mlp.append(NormedLinear(dims[-2], dims[-1], act=act) if act else nn.Linear(dims[-2], dims[-1]))
+	mlp.append(NormedLinear(dims[-2], dims[-1], act=act) if act else nn.Linear(dims[-2], dims[-1])) # the last layer has layernorm????
 	return nn.Sequential(*mlp)
 
 

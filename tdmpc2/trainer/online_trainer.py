@@ -150,14 +150,8 @@ class OnlineTrainer(Trainer):
 			print(" FINAL SIMPLE ENCODING SPACE ANALYSIS")
 			print("="*60)
 			try:
-				# Generate final encoding space plots
-				self.agent.encoding_monitor.plot_encoding_space_curve(save_plot=True)
-				
-				# Generate and save observation GIFs for visualization
-				print("🎬 Generating observation GIFs for visualization...")
-				gif_dir = self.agent.encoding_monitor.save_observation_gifs(max_gifs=5)
-				if gif_dir:
-					print(f"✅ GIFs saved to: {gif_dir}")
+				# Generate final monitoring plots
+				self.agent.encoding_monitor.plot_monitoring_curves(save_plot=True)
 				
 				# Print final report
 				report = self.agent.encoding_monitor.generate_simple_report()

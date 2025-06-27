@@ -23,13 +23,13 @@ class RandomPatchTransformer(nn.Module):
 		encoder_layer = nn.TransformerEncoderLayer(
 			d_model=d_model,
 			nhead=1,
-			dim_feedforward=2 * d_model,
+			dim_feedforward=d_model,
 			dropout=0.0,
+			activation=nn.Mish(inplace=False),
 			norm_first=False,
 			batch_first=True,
 		)
 		self.encoder = nn.TransformerEncoder(encoder_layer, num_layers=1, norm=None)
-		self.out_proj = nn.Linear(d_model, cfg.collapse_prevention_dim)
 		self.scale_factor = cfg.scale_factor
 
 		# Freeze parameters
@@ -49,7 +49,7 @@ class RandomPatchTransformer(nn.Module):
 		x = self.unfold(x).transpose(1, 2)  # (B, N_patches, patch_dim)
 		x = self.in_proj(x)  # (B, N_patches, d_model)
 		x = self.encoder(x)  # (B, N_patches, d_model)
-		x = self.out_proj(x.sum(dim=1)) * self.scale_factor
+		x = x.sum(dim=1) * self.scale_factor
 		return x
 
 
@@ -83,7 +83,7 @@ class WorldModel(nn.Module):
 		if getattr(cfg, 'collapse_prevention', False):
 			self._collapse_pred = layers.mlp(cfg.latent_dim, 2*[cfg.mlp_dim], cfg.collapse_prevention_dim)
 			in_channels = cfg.obs_shape['rgb'][0] if 'rgb' in cfg.obs_shape else cfg.obs_shape['state'][0]
-			self._random_fn = RandomPatchTransformer(cfg,in_channels, patch_size=8, d_model=128)
+			self._random_fn = RandomPatchTransformer(cfg,in_channels, patch_size=8, d_model=cfg.collapse_prevention_dim)
 		else:
 			self._collapse_pred = None
 			self._random_fn = None

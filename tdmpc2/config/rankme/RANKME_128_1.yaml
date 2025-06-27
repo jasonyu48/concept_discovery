@@ -10,10 +10,10 @@ episodic: false
 # evaluation
 checkpoint: ???
 eval_episodes: 10
-eval_freq: 2500
+eval_freq: 5000
 
 # training
-steps: 3000
+steps: 350_000
 batch_size: 256
 reward_coef: 0.1
 value_coef: 0.1
@@ -26,9 +26,9 @@ full_rank_reg: false
 full_rank_reg_coef: 0.005
 full_rank_reg_num_samples: 128  # Number of observation samples for full rank regularization
 collapse_prevention: true  # enable/disable random-function predictor mechanism
-collapse_prevention_dim: 256
+collapse_prevention_dim: 128
 collapse_prevention_coef: 1
-scale_factor: 10.0
+scale_factor: 1.0
 rho: 0.5
 lr: 3e-4 #was 3e-4
 enc_lr_scale: 0.3
@@ -39,19 +39,19 @@ discount_min: 0.95
 discount_max: 0.995
 buffer_size: 1_000_000
 q_sample_ratio: 1.0  # Ratio of buffer data visible to Q-function and collapse prevention training (0.0-1.0)
-exp_name: TEST_RANKME
+exp_name: RANKME_128_1
 data_dir: ???
 JEPA_sg: false
-grad_from_Q: true
-grad_from_R: False
+grad_from_Q: false
+grad_from_R: false
 grad_from_policy: false
 
 # misc
 compile: false
-save_video: true
+save_video: false
 save_agent: true
-seed: 2017
-monitor_freq: 2500
+seed: 2018
+monitor_freq: 5000
 full_rank: false
 simnorm: false
 simnorm_dim: 8
@@ -60,7 +60,7 @@ rankme_samples: 30_000
 
 monitor_rankme: true
 monitor_eval_reward: true
-monitor_jacobian_rank: false
+monitor_jacobian_rank: true
 monitor_encoding_space: true
 
 # planning
