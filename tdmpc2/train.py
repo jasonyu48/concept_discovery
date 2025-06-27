@@ -49,6 +49,15 @@ def train(cfg: dict):
 	set_seed(cfg.seed)
 	print(colored('Work dir:', 'yellow', attrs=['bold']), cfg.work_dir)
 
+	# when the user tries to overwrite existing observations, ask for confirmation
+	if cfg.save_obs_for_rankme:
+		obs_file = f"/scratch/tshu2/jyu197/obs_data/{cfg.task}/{cfg.exp_name}/observations.pt"
+		if os.path.exists(obs_file):
+			overwrite = input(f"Observations file {obs_file} already exists. Overwrite? (y/n): ")
+			if overwrite.lower() != 'y':
+				print("Training cancelled to avoid overwriting existing observations.")
+				exit()
+
 	trainer_cls = OfflineTrainer if cfg.multitask else OnlineTrainer
 	trainer = trainer_cls(
 		cfg=cfg,
