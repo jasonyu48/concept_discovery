@@ -63,6 +63,9 @@ class RandomLinear(nn.Module):
 		self.eval()
 		
 	def forward(self, x: torch.Tensor) -> torch.Tensor:
+		# x is of shape (*, 9, 64, 64)
+		# we want to flatten the last three dimensions
+		x = x.reshape(-1, 9*64*64)
 		return self.proj(x)*self.scale_factor
 
 
@@ -97,9 +100,9 @@ class WorldModel(nn.Module):
 			self._collapse_pred = layers.mlp(cfg.latent_dim, 2*[cfg.mlp_dim], cfg.collapse_prevention_dim)
 			in_channels = cfg.obs_shape['rgb'][0] if 'rgb' in cfg.obs_shape else cfg.obs_shape['state'][0]
 			if cfg.collapse_prevention_dim <= 8:
-				self._random_fn = RandomLinear(cfg,in_channels, cfg.collapse_prevention_dim)
+				self._random_fn = RandomLinear(cfg, 9*64*64, cfg.collapse_prevention_dim)
 			else:
-				self._random_fn = RandomPatchTransformer(cfg,in_channels, patch_size=8, d_model=cfg.collapse_prevention_dim)
+				self._random_fn = RandomPatchTransformer(cfg, in_channels, patch_size=8, d_model=cfg.collapse_prevention_dim)
 		else:
 			self._collapse_pred = None
 			self._random_fn = None
