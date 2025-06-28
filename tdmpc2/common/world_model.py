@@ -52,6 +52,19 @@ class RandomPatchTransformer(nn.Module):
 		x = x.sum(dim=1) * self.scale_factor
 		return x
 
+class RandomLinear(nn.Module):
+	def __init__(self, cfg, in_channels, out_channels):
+		super().__init__()
+		self.proj = nn.Linear(in_channels, out_channels)
+		self.scale_factor = cfg.scale_factor
+
+		for p in self.parameters():
+			p.requires_grad = False
+		self.eval()
+		
+	def forward(self, x: torch.Tensor) -> torch.Tensor:
+		return self.proj(x)*self.scale_factor
+
 
 class WorldModel(nn.Module):
 	"""
@@ -83,7 +96,10 @@ class WorldModel(nn.Module):
 		if getattr(cfg, 'collapse_prevention', False):
 			self._collapse_pred = layers.mlp(cfg.latent_dim, 2*[cfg.mlp_dim], cfg.collapse_prevention_dim)
 			in_channels = cfg.obs_shape['rgb'][0] if 'rgb' in cfg.obs_shape else cfg.obs_shape['state'][0]
-			self._random_fn = RandomPatchTransformer(cfg,in_channels, patch_size=8, d_model=cfg.collapse_prevention_dim)
+			if cfg.collapse_prevention_dim <= 8:
+				self._random_fn = RandomLinear(cfg,in_channels, cfg.collapse_prevention_dim)
+			else:
+				self._random_fn = RandomPatchTransformer(cfg,in_channels, patch_size=8, d_model=cfg.collapse_prevention_dim)
 		else:
 			self._collapse_pred = None
 			self._random_fn = None

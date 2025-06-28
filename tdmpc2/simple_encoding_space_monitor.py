@@ -173,9 +173,6 @@ class SimpleEncodingSpaceMonitor:
             
             print(f"✅ Sampled {len(indices)} baseline observations")
             print(f"   Final shape: {self.baseline_observations.shape}")
-            
-            # Compute initial baseline encodings
-            self._update_baseline_encodings()
 
             torch.manual_seed(self.cfg.seed)
             np.random.seed(self.cfg.seed)
@@ -238,8 +235,6 @@ class SimpleEncodingSpaceMonitor:
         print(f"✅ Generated {len(observations)} fallback baseline observations")
         print(f"   Final shape: {self.baseline_observations.shape}")
         
-        # Compute initial baseline encodings
-        self._update_baseline_encodings()
         
     def _update_baseline_encodings(self):
         """Update baseline encodings with current encoder state"""
