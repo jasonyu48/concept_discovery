@@ -99,10 +99,12 @@ class WorldModel(nn.Module):
 		if getattr(cfg, 'collapse_prevention', False):
 			self._collapse_pred = layers.mlp(cfg.latent_dim, 2*[cfg.mlp_dim], cfg.collapse_prevention_dim)
 			in_channels = cfg.obs_shape['rgb'][0] if 'rgb' in cfg.obs_shape else cfg.obs_shape['state'][0]
-			if cfg.collapse_prevention_dim <= 8:
+			if cfg.collapse_prevention_network == 'linear':
 				self._random_fn = RandomLinear(cfg, 9*64*64, cfg.collapse_prevention_dim)
-			else:
+			elif cfg.collapse_prevention_network == 'transformer':
 				self._random_fn = RandomPatchTransformer(cfg, in_channels, patch_size=8, d_model=cfg.collapse_prevention_dim)
+			else:
+				raise ValueError(f"Invalid collapse prevention network: {cfg.collapse_prevention_network}")
 		else:
 			self._collapse_pred = None
 			self._random_fn = None
@@ -143,7 +145,7 @@ class WorldModel(nn.Module):
 			frozen_params = sum(p.numel() for p in self._random_fn.parameters())
 			encoder_params = sum(p.numel() for p in self._encoder.parameters())
 			collapse_params = sum(p.numel() for p in self._collapse_pred.parameters())
-			repr += f"\nFrozen transformer params: {frozen_params:,}"
+			repr += f"\nFrozen {self.cfg.collapse_prevention_network} params: {frozen_params:,}"
 			repr += f"\nEncoder + collapse_pred params: {encoder_params + collapse_params:,}"
 			if encoder_params + collapse_params < frozen_params:
 				repr += f"\n❌ encoder + collapse_pred is not expressive enough"

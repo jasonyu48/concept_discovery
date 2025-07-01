@@ -2,6 +2,7 @@ import torch
 from tensordict.tensordict import TensorDict
 from torchrl.data.replay_buffers import ReplayBuffer, LazyTensorStorage
 from torchrl.data.replay_buffers.samplers import SliceSampler
+from collections import deque
 
 
 class Buffer():
@@ -25,10 +26,15 @@ class Buffer():
 		self._batch_size = cfg.batch_size * (cfg.horizon+1)
 		self._num_eps = 0
 		
-		# Q-function sampling mask parameters
+		# Q-function sampling mask parameters (per-episode visibility)
 		self._q_sample_ratio = self.cfg.q_sample_ratio
-		self._q_mask = None
-		self._q_mask_episodes = 0
+		# Fixed-size book-keeping controlled by capacity; see _register_episode
+		# Each entry: (episode_id:int, remaining_steps:int, visible:bool)
+		self._episode_queue = deque()  # oldest → newest
+		self._episode_visible = {}              # episode_id -> bool
+		self._steps_in_buffer = 0               # number of env steps currently resident
+		self._q_mask_episodes = 0               # number of *visible* resident episodes
+		# NOTE: we no longer store a growing tensor _q_mask. Visibility is queried via dict.
 
 		# ---------------------------------------------------------------------
 		# Observation collection for RankMe / representation analysis
@@ -60,8 +66,13 @@ class Buffer():
 
 	@property
 	def num_eps(self):
-		"""Return the number of episodes in the buffer."""
+		"""Return the number of episodes EVER inserted into the buffer."""
 		return self._num_eps
+
+	@property
+	def resident_eps(self):
+		"""Return the number of episodes whose steps are still stored in the buffer."""
+		return len(self._episode_queue)
 
 	def _reserve_buffer(self, storage):
 		"""
@@ -99,40 +110,46 @@ class Buffer():
 		Load a batch of episodes into the buffer. This is useful for loading data from disk,
 		and is more efficient than adding episodes one by one.
 		"""
+		# td has shape (num_eps, T, ...)
 		num_new_eps = len(td)
+		episode_lengths = td['reward'].shape[1]
 		episode_idx = torch.arange(self._num_eps, self._num_eps+num_new_eps, dtype=torch.int64)
 		td['episode'] = episode_idx.unsqueeze(-1).expand(-1, td['reward'].shape[1])
 		if self._num_eps == 0:
 			self._buffer = self._init(td[0])
-		td = td.reshape(td.shape[0]*td.shape[1])
-		self._buffer.extend(td)
+		# Register each episode before flattening
+		for i in range(num_new_eps):
+			self._register_episode(self._num_eps + i, episode_lengths)
+		# Flatten and write to storage
+		td_flat = td.reshape(td.shape[0]*td.shape[1])
+		self._buffer.extend(td_flat)
 		self._num_eps += num_new_eps
 		
 		# Observation collection when bulk loading data
 		if self._obs_collect_enabled and self._obs_saved < self._obs_save_limit:
-			self._collect_observations(td.get('obs', None))
-		
-		# Update Q-function mask when new episodes are added
-		self._update_q_mask_on_new_episodes()
+			self._collect_observations(td_flat.get('obs', None))
 		
 		return self._num_eps
 
 	def add(self, td):
 		"""Add an episode to the buffer."""
-		td['episode'] = torch.full_like(td['reward'], self._num_eps, dtype=torch.int64)
+		ep_id = self._num_eps
+		# Episode length (timesteps)
+		ep_len = td['reward'].shape[0]
+		td['episode'] = torch.full_like(td['reward'], ep_id, dtype=torch.int64)
 		if self._num_eps == 0:
 			self._buffer = self._init(td)
 		self._buffer.extend(td)
 		self._num_eps += 1
+		
+		# Register episode for visibility bookkeeping
+		self._register_episode(ep_id, ep_len)
 		
 		# -------------------------------------------------------------
 		# Observation collection (per-episode) – BEFORE any early exit.
 		# -------------------------------------------------------------
 		if self._obs_collect_enabled and self._obs_saved < self._obs_save_limit:
 			self._collect_observations(td.get('obs', None))
-		
-		# Update Q-function mask when new episode is added
-		self._update_q_mask_on_new_episodes()
 		
 		return self._num_eps
 
@@ -180,18 +197,12 @@ class Buffer():
 		Returns:
 			torch.Tensor: Boolean mask of shape (batch_size,) indicating which samples to use for Q-function
 		"""
-		if self._q_sample_ratio >= 1.0 or self._q_mask is None:
+		if self._q_sample_ratio >= 1.0:
 			# Use all samples
 			return torch.ones(len(episode_ids), dtype=torch.bool, device=self._device)
 		
-		# Create mask based on episode visibility
-		batch_mask = torch.zeros(len(episode_ids), dtype=torch.bool, device=self._device)
-		
-		# For each sample in batch, check if its episode is visible to Q-function
-		for i, ep_id in enumerate(episode_ids):
-			if ep_id < len(self._q_mask) and self._q_mask[ep_id]:
-				batch_mask[i] = True
-		
+		batch_mask = torch.tensor([self._episode_visible.get(int(ep_id), False) for ep_id in episode_ids],
+								 dtype=torch.bool, device=self._device)
 		return batch_mask
 
 	def _update_q_mask_on_new_episodes(self):
@@ -200,33 +211,34 @@ class Buffer():
 		Allows for slight imprecision in ratio when total episodes is odd.
 		"""
 		if self._num_eps == 0:
-			self._q_mask = None
+			self._episode_visible = {}
 			self._q_mask_episodes = 0
 			return
 		
 		if self._q_sample_ratio >= 1.0:
-			self._q_mask = torch.ones(self._num_eps, dtype=torch.bool)
+			self._episode_visible = {ep_id: True for ep_id in range(self._num_eps)}
 			self._q_mask_episodes = self._num_eps
 			return
 		
-		old_num_eps = len(self._q_mask) if self._q_mask is not None else 0
+		old_num_eps = len(self._episode_visible) if self._episode_visible is not None else 0
 		
 		if old_num_eps == 0:
 			# First time creating mask - initial setup
 			# Use round() instead of int() to handle odd numbers better
 			num_visible = round(self._num_eps * self._q_sample_ratio)
-			self._q_mask = torch.zeros(self._num_eps, dtype=torch.bool)
+			self._episode_visible = {ep_id: False for ep_id in range(self._num_eps)}
 			if num_visible > 0:
 				perm = torch.randperm(self._num_eps)
 				visible_indices = perm[:num_visible]
-				self._q_mask[visible_indices] = True
+				for ep_id in visible_indices:
+					self._episode_visible[ep_id] = True
 			self._q_mask_episodes = num_visible
 			
 		elif self._num_eps > old_num_eps:
 			# New episodes added - extend mask but keep old visible episodes unchanged
 			new_episodes_count = self._num_eps - old_num_eps
-			old_mask = self._q_mask.clone()
-			current_visible = old_mask.sum().item()
+			old_visible = {ep_id: visible for ep_id, visible in self._episode_visible.items() if visible}
+			current_visible = len(old_visible)
 			
 			# Calculate target visible episodes with rounding for better handling of odd numbers
 			target_visible = round(self._num_eps * self._q_sample_ratio)
@@ -236,19 +248,21 @@ class Buffer():
 			new_visible = min(new_visible_needed, new_episodes_count)
 			
 			# Create mask for new episodes (randomly select)
-			new_mask_part = torch.zeros(new_episodes_count, dtype=torch.bool)
+			new_visible_episodes = {ep_id: False for ep_id in range(old_num_eps, self._num_eps)}
 			if new_visible > 0:
 				new_perm = torch.randperm(new_episodes_count)
-				new_mask_part[new_perm[:new_visible]] = True
+				new_visible_episodes_perm = new_perm[:new_visible]
+				for ep_id in new_visible_episodes_perm:
+					new_visible_episodes[old_num_eps + ep_id] = True
 			
 			# Combine old and new masks
-			self._q_mask = torch.cat([old_mask, new_mask_part])
-			self._q_mask_episodes = self._q_mask.sum().item()
+			self._episode_visible = {**old_visible, **new_visible_episodes}
+			self._q_mask_episodes = len(self._episode_visible)
 
 	@property
 	def q_visible_episodes(self):
 		"""Return the number of episodes visible to Q-function training."""
-		return self._q_mask_episodes if self._q_mask is not None else self._num_eps
+		return self._q_mask_episodes
 
 	# -----------------------------------------------------------------
 	# Observation collection helpers
@@ -297,3 +311,67 @@ class Buffer():
 		finally:
 			# Free memory
 			self._obs_buffer = []
+
+	def _register_episode(self, episode_id: int, length: int):
+		"""Step-exact bookkeeping of episode residency and visibility.
+
+		Args:
+		    episode_id: Global, monotonically increasing ID.
+		    length:     Number of environment steps of this episode.
+
+		The method emulates the wrap-around effect of the underlying circular
+		storage:
+		* ``self._steps_in_buffer`` tracks how many *time-steps* are currently
+		  resident.
+		* When adding *length* new steps, we compute how many old steps will be
+		  overwritten (``overwrite = max(0, steps_in_buffer + length − capacity)``)
+		  and deduct them from the front of ``self._episode_queue`` *partially if
+		  necessary*.
+		* We keep an entry for an episode until **all** of its remaining steps have
+		  been overwritten.  Only then do we drop its visibility flag.
+		"""
+		# ------------------------------------------------------------------
+		# 1. Evict (possibly partially) the oldest episodes to make room
+		# ------------------------------------------------------------------
+		overwrite = max(0, self._steps_in_buffer + length - self._capacity)
+
+		while overwrite > 0 and self._episode_queue:
+			old = self._episode_queue[0]  # peek, do not pop yet
+			old_id, old_rem_steps, old_vis = old
+			if old_rem_steps <= overwrite:
+				# Entire old episode will be removed
+				self._episode_queue.popleft()
+				overwrite -= old_rem_steps
+				self._steps_in_buffer -= old_rem_steps
+				if old_vis:
+					self._q_mask_episodes -= 1
+				self._episode_visible.pop(old_id, None)
+			else:
+				# Partially overwrite this episode; adjust its remaining length
+				new_rem = old_rem_steps - overwrite
+				self._episode_queue.popleft()
+				self._episode_queue.appendleft((old_id, new_rem, old_vis))
+				self._steps_in_buffer -= overwrite
+				overwrite = 0
+
+		# ------------------------------------------------------------------
+		# 2. Decide visibility for the new episode
+		# ------------------------------------------------------------------
+		if self._q_sample_ratio >= 1.0:
+			visible = True
+		else:
+			visible = torch.rand(1).item() < self._q_sample_ratio
+
+		# ------------------------------------------------------------------
+		# 3. Insert metadata for the new episode
+		# ------------------------------------------------------------------
+		self._episode_queue.append((episode_id, length, visible))
+		self._steps_in_buffer += length
+
+		self._episode_visible[episode_id] = visible
+		if visible:
+			self._q_mask_episodes += 1
+
+		# Sanity check: should never exceed capacity
+		assert self._steps_in_buffer <= self._capacity, "Bookkeeping error: steps exceed capacity"
+		return visible

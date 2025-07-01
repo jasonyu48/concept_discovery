@@ -486,9 +486,10 @@ class TDMPC2(torch.nn.Module):
 		update_info = self._update(obs, action, reward, terminated, q_mask=q_mask, **kwargs, step=step, pretrain_step=pretrain_step)
 		
 		# Compute visibility percentage
-		visible_percent = 100.0 * buffer.q_visible_episodes / max(buffer.num_eps, 1)
+		resident = buffer.resident_eps
+		visible_percent = 100.0 * buffer.q_visible_episodes / max(resident, 1)
 		if step % self.cfg.monitor_freq == 0 and pretrain_step < 1:
-			print(f"Q-visible episodes: {buffer.q_visible_episodes}/{buffer.num_eps} ({visible_percent:.1f}%) -> sample_ratio: {self.cfg.q_sample_ratio}")
+			print(f"Q-visible episodes: {buffer.q_visible_episodes}/{resident} ({visible_percent:.1f}%) -> sample_ratio: {self.cfg.q_sample_ratio}")
 		# Log metric
 		update_info["q_visible_percent"] = torch.tensor(visible_percent, device=self.device)
 
