@@ -14,6 +14,7 @@ import imageio
 import json
 import pandas as pd
 import matplotlib.cm as cm
+from PIL import Image
 
 # RankMe metric
 try:
@@ -616,7 +617,13 @@ class SimpleEncodingSpaceMonitor:
             rec_img = np.clip(rec_img, 0.0, 1.0)
             # concatenate side by side
             comb = np.concatenate([orig_img, rec_img], axis=1)
-            frames.append((comb * 255).astype(np.uint8))
+            comb_uint8 = (comb * 255).astype(np.uint8)
+            scale = getattr(self.cfg, 'gif_scale', 2)
+            if scale and scale > 1:
+                pil_img = Image.fromarray(comb_uint8)
+                pil_img = pil_img.resize((pil_img.width * scale, pil_img.height * scale), resample=Image.NEAREST)
+                comb_uint8 = np.array(pil_img)
+            frames.append(comb_uint8)
         gif_path = gif_dir / f"decoder_cmp_step{step}.gif"
         imageio.mimsave(str(gif_path), frames, fps=2)
 

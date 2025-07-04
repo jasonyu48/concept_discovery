@@ -194,7 +194,6 @@ class CNNDecoder(nn.Module):
         # This allows it to reconstruct the full frame stack (e.g., 9 channels).
         output_channels = cfg.obs_shape['rgb'][0]
         self.net = nn.Sequential(
-                    nn.ReLU(inplace=True),                                # (32,4,4)
                     nn.ConvTranspose2d(self.h_dim, self.h_dim,
                                        3, stride=1, padding=1),  nn.ReLU(),        # 4×4
                     nn.ConvTranspose2d(self.h_dim, self.h_dim,

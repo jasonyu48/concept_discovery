@@ -19,578 +19,541 @@ from pathlib import Path
 ####end of decoder related imports###
 
 class TDMPC2(torch.nn.Module):
-    """
-    TD-MPC2 agent. Implements training + inference.
-    Can be used for both single-task and multi-task experiments,
-    and supports both state and pixel observations.
-    """
+	"""
+	TD-MPC2 agent. Implements training + inference.
+	Can be used for both single-task and multi-task experiments,
+	and supports both state and pixel observations.
+	"""
 
-    def __init__(self, cfg):
-        super().__init__()
-        self.cfg = cfg
-        self.device = torch.device('cuda:0')
-        self.model = WorldModel(cfg).to(self.device)
-        # --------------------------------------------------
-        #  Decoder：activated when cfg.enable_decoder = True 
-        # --------------------------------------------------
-        if getattr(self.cfg, "enable_decoder", False):
-            self.decoder = dec(cfg).to(self.device)
-            self.decoder_opt = torch.optim.Adam(
-                self.decoder.parameters(),
-                lr=self.cfg.decoder_lr,
-                betas=(0.9, 0.999)
-            )
-            #  logs/.../decoderloss.txt
-            self.decoder_loss_file = Path(self.cfg.work_dir) / self.cfg.decoder_loss_file
-            self.decoder_loss_file.write_text("step,loss\n")
-            # --- Plotting setup ---
-            self.decoder_curve_file = self.decoder_loss_file.with_name('DecoderLossCurve.png')
-            self.decoder_steps = []
-            self.decoder_losses = []
-            # --- End plotting setup ---
+	def __init__(self, cfg):
+		super().__init__()
+		self.cfg = cfg
+		self.device = torch.device('cuda:0')
+		self.model = WorldModel(cfg).to(self.device)
+		# --------------------------------------------------
+		#  Decoder：activated when cfg.enable_decoder = True 
+		# --------------------------------------------------
+		if getattr(self.cfg, "enable_decoder", False):
+			self.decoder = dec(cfg).to(self.device)
+			self.decoder_opt = torch.optim.Adam(
+				self.decoder.parameters(),
+				lr=self.cfg.decoder_lr,
+				betas=(0.9, 0.999)
+			)
+			#  logs/.../decoderloss.txt
+			self.decoder_loss_file = Path(self.cfg.work_dir) / self.cfg.decoder_loss_file
+			self.decoder_loss_file.write_text("step,loss\n")
+			# --- Plotting setup ---
+			self.decoder_curve_file = self.decoder_loss_file.with_name('DecoderLossCurve.png')
+			self.decoder_steps = []
+			self.decoder_losses = []
+			# --- End plotting setup ---
 
-        self.optim = torch.optim.Adam([
-            {'params': self.model._encoder.parameters(), 'lr': self.cfg.lr*self.cfg.enc_lr_scale},
-            {'params': self.model._dynamics.parameters()},
-            {'params': self.model._reward.parameters()},
-            {'params': self.model._termination.parameters() if self.cfg.episodic else []},
-            {'params': self.model._Qs.parameters()},
-            {'params': self.model._task_emb.parameters() if self.cfg.multitask else []},
-            {'params': self.model._collapse_pred.parameters() if getattr(self.cfg, 'collapse_prevention', False) else []}
-        ], lr=self.cfg.lr, capturable=True)
-        self.pi_optim = torch.optim.Adam(self.model._pi.parameters(), lr=self.cfg.lr, eps=1e-5, capturable=True)
-        self.model.eval()
-        self.scale = RunningScale(cfg)
-        self.cfg.iterations += 2*int(cfg.action_dim >= 20) # Heuristic for large action spaces
-        self.discount = torch.tensor(
-            [self._get_discount(ep_len) for ep_len in cfg.episode_lengths], device='cuda:0'
-        ) if self.cfg.multitask else self._get_discount(cfg.episode_length)
-        print('Episode length:', cfg.episode_length)
-        print('Discount factor:', self.discount)
-        self._prev_mean = torch.nn.Buffer(torch.zeros(self.cfg.horizon, self.cfg.action_dim, device=self.device))
-        if cfg.compile:
-            print('Compiling update function with torch.compile...')
-            self._update = torch.compile(self._update, mode="reduce-overhead")
-        
-        # Initialize encoding space monitor
-        self.encoding_monitor = None  # Will be set by trainer after env is available
+		self.optim = torch.optim.Adam([
+			{'params': self.model._encoder.parameters(), 'lr': self.cfg.lr*self.cfg.enc_lr_scale},
+			{'params': self.model._dynamics.parameters()},
+			{'params': self.model._reward.parameters()},
+			{'params': self.model._termination.parameters() if self.cfg.episodic else []},
+			{'params': self.model._Qs.parameters()},
+			{'params': self.model._task_emb.parameters() if self.cfg.multitask else []},
+			{'params': self.model._collapse_pred.parameters() if getattr(self.cfg, 'collapse_prevention', False) else []}
+		], lr=self.cfg.lr, capturable=True)
+		self.pi_optim = torch.optim.Adam(self.model._pi.parameters(), lr=self.cfg.lr, eps=1e-5, capturable=True)
+		self.model.eval()
+		self.scale = RunningScale(cfg)
+		self.cfg.iterations += 2*int(cfg.action_dim >= 20) # Heuristic for large action spaces
+		self.discount = torch.tensor(
+			[self._get_discount(ep_len) for ep_len in cfg.episode_lengths], device='cuda:0'
+		) if self.cfg.multitask else self._get_discount(cfg.episode_length)
+		print('Episode length:', cfg.episode_length)
+		print('Discount factor:', self.discount)
+		self._prev_mean = torch.nn.Buffer(torch.zeros(self.cfg.horizon, self.cfg.action_dim, device=self.device))
+		if cfg.compile:
+			print('Compiling update function with torch.compile...')
+			self._update = torch.compile(self._update, mode="reduce-overhead")
+		
+		# Initialize encoding space monitor
+		self.encoding_monitor = None  # Will be set by trainer after env is available
 
-    @property
-    def plan(self):
-        _plan_val = getattr(self, "_plan_val", None)
-        if _plan_val is not None:
-            return _plan_val
-        if self.cfg.compile:
-            plan = torch.compile(self._plan, mode="reduce-overhead")
-        else:
-            plan = self._plan
-        self._plan_val = plan
-        return self._plan_val
+	@property
+	def plan(self):
+		_plan_val = getattr(self, "_plan_val", None)
+		if _plan_val is not None:
+			return _plan_val
+		if self.cfg.compile:
+			plan = torch.compile(self._plan, mode="reduce-overhead")
+		else:
+			plan = self._plan
+		self._plan_val = plan
+		return self._plan_val
 
-    def _get_discount(self, episode_length):
-        """
-        Returns discount factor for a given episode length.
-        Simple heuristic that scales discount linearly with episode length.
-        Default values should work well for most tasks, but can be changed as needed.
+	def _get_discount(self, episode_length):
+		"""
+		Returns discount factor for a given episode length.
+		Simple heuristic that scales discount linearly with episode length.
+		Default values should work well for most tasks, but can be changed as needed.
 
-        Args:
-            episode_length (int): Length of the episode. Assumes episodes are of fixed length.
+		Args:
+			episode_length (int): Length of the episode. Assumes episodes are of fixed length.
 
-        Returns:
-            float: Discount factor for the task.
-        """
-        frac = episode_length/self.cfg.discount_denom
-        return min(max((frac-1)/(frac), self.cfg.discount_min), self.cfg.discount_max)
+		Returns:
+			float: Discount factor for the task.
+		"""
+		frac = episode_length/self.cfg.discount_denom
+		return min(max((frac-1)/(frac), self.cfg.discount_min), self.cfg.discount_max)
 
-    # def save(self, fp):
-    # 	"""
-    # 	Save state dict of the agent to filepath.
+	def save(self, fp):
+		"""
+		Save state dict of the agent to filepath.
 
-    # 	Args:
-    # 		fp (str): Filepath to save state dict to.
-    # 	"""
-    # 	torch.save({"model": self.model.state_dict()}, fp)
+		Args:
+			fp (str): Filepath to save state dict to.
+		"""
+		torch.save({"model": self.model.state_dict()}, fp)
 
-    # def load(self, fp):
-    # 	"""
-    # 	Load a saved state dict from filepath (or dictionary) into current agent.
+	def load(self, fp):
+		"""
+		Load a saved state dict from filepath (or dictionary) into current agent.
 
-    # 	Args:
-    # 		fp (str or dict): Filepath or state dict to load.
-    # 	"""
-    # 	if isinstance(fp, dict):
-    # 		state_dict = fp
-    # 	else:
-    # 		state_dict = torch.load(fp, map_location=torch.get_default_device(), weights_only=False)
-    # 	state_dict = state_dict["model"] if "model" in state_dict else state_dict
-    # 	state_dict = api_model_conversion(self.model.state_dict(), state_dict)
-    # 	self.model.load_state_dict(state_dict)
-    # 	return
-    def save(self, fp):
-       state = {"model": self.model.state_dict()}
-       if getattr(self.cfg, "enable_decoder", False):
-           state["decoder"] = self.decoder.state_dict()
-       torch.save(state, fp)
+		Args:
+			fp (str or dict): Filepath or state dict to load.
+		"""
+		if isinstance(fp, dict):
+			state_dict = fp
+		else:
+			state_dict = torch.load(fp, map_location=torch.get_default_device(), weights_only=False)
+		state_dict = state_dict["model"] if "model" in state_dict else state_dict
+		state_dict = api_model_conversion(self.model.state_dict(), state_dict)
+		self.model.load_state_dict(state_dict)
+		return
 
-    def load(self, fp):
-       if isinstance(fp, dict):
-           state_dict = fp
-       else:
-           state_dict = torch.load(fp, map_location=torch.get_default_device())
-       decoder_sd = state_dict.pop("decoder", None)
-       main_sd = state_dict["model"] if "model" in state_dict else state_dict
-       main_sd = api_model_conversion(self.model.state_dict(), main_sd)
-       self.model.load_state_dict(main_sd)
-       if decoder_sd is not None and getattr(self.cfg, "enable_decoder", False):
-           self.decoder.load_state_dict(decoder_sd)
+	@torch.no_grad()
+	def act(self, obs, t0=False, eval_mode=False, task=None):
+		"""
+		Select an action by planning in the latent space of the world model.
 
-    @torch.no_grad()
-    def act(self, obs, t0=False, eval_mode=False, task=None):
-        """
-        Select an action by planning in the latent space of the world model.
+		Args:
+			obs (torch.Tensor): Observation from the environment.
+			t0 (bool): Whether this is the first observation in the episode.
+			eval_mode (bool): Whether to use the mean of the action distribution.
+			task (int): Task index (only used for multi-task experiments).
 
-        Args:
-            obs (torch.Tensor): Observation from the environment.
-            t0 (bool): Whether this is the first observation in the episode.
-            eval_mode (bool): Whether to use the mean of the action distribution.
-            task (int): Task index (only used for multi-task experiments).
+		Returns:
+			torch.Tensor: Action to take in the environment.
+		"""
+		obs = obs.to(self.device, non_blocking=True).unsqueeze(0)
+		if task is not None:
+			task = torch.tensor([task], device=self.device)
+		if self.cfg.mpc:
+			return self.plan(obs, t0=t0, eval_mode=eval_mode, task=task).cpu()
+		z = self.model.encode(obs, task)
+		action, info = self.model.pi(z, task)
+		if eval_mode:
+			action = info["mean"]
+		return action[0].cpu()
 
-        Returns:
-            torch.Tensor: Action to take in the environment.
-        """
-        obs = obs.to(self.device, non_blocking=True).unsqueeze(0)
-        if task is not None:
-            task = torch.tensor([task], device=self.device)
-        if self.cfg.mpc:
-            return self.plan(obs, t0=t0, eval_mode=eval_mode, task=task).cpu()
-        z = self.model.encode(obs, task)
-        action, info = self.model.pi(z, task)
-        if eval_mode:
-            action = info["mean"]
-        return action[0].cpu()
+	@torch.no_grad()
+	def _estimate_value(self, z, actions, task):
+		"""Estimate value of a trajectory starting at latent state z and executing given actions."""
+		G, discount = 0, 1
+		termination = torch.zeros(self.cfg.num_samples, 1, dtype=torch.float32, device=z.device)
+		for t in range(self.cfg.horizon):
+			reward = math.two_hot_inv(self.model.reward(z, actions[t], task), self.cfg)
+			z = self.model.next(z, actions[t], task)
+			G = G + discount * (1-termination) * reward
+			discount_update = self.discount[torch.tensor(task)] if self.cfg.multitask else self.discount
+			discount = discount * discount_update
+			if self.cfg.episodic:
+				termination = torch.clip(termination + (self.model.termination(z, task) > 0.5).float(), max=1.)
+		action, _ = self.model.pi(z, task)
+		return G + discount * (1-termination) * self.model.Q(z, action, task, return_type='avg')
 
-    @torch.no_grad()
-    def _estimate_value(self, z, actions, task):
-        """Estimate value of a trajectory starting at latent state z and executing given actions."""
-        G, discount = 0, 1
-        termination = torch.zeros(self.cfg.num_samples, 1, dtype=torch.float32, device=z.device)
-        for t in range(self.cfg.horizon):
-            reward = math.two_hot_inv(self.model.reward(z, actions[t], task), self.cfg)
-            z = self.model.next(z, actions[t], task)
-            G = G + discount * (1-termination) * reward
-            discount_update = self.discount[torch.tensor(task)] if self.cfg.multitask else self.discount
-            discount = discount * discount_update
-            if self.cfg.episodic:
-                termination = torch.clip(termination + (self.model.termination(z, task) > 0.5).float(), max=1.)
-        action, _ = self.model.pi(z, task)
-        return G + discount * (1-termination) * self.model.Q(z, action, task, return_type='avg')
+	@torch.no_grad()
+	def _plan(self, obs, t0=False, eval_mode=False, task=None):
+		"""
+		Plan a sequence of actions using the learned world model.
 
-    @torch.no_grad()
-    def _plan(self, obs, t0=False, eval_mode=False, task=None):
-        """
-        Plan a sequence of actions using the learned world model.
+		Args:
+			z (torch.Tensor): Latent state from which to plan.
+			t0 (bool): Whether this is the first observation in the episode.
+			eval_mode (bool): Whether to use the mean of the action distribution.
+			task (Torch.Tensor): Task index (only used for multi-task experiments).
 
-        Args:
-            z (torch.Tensor): Latent state from which to plan.
-            t0 (bool): Whether this is the first observation in the episode.
-            eval_mode (bool): Whether to use the mean of the action distribution.
-            task (Torch.Tensor): Task index (only used for multi-task experiments).
+		Returns:
+			torch.Tensor: Action to take in the environment.
+		"""
+		# Sample policy trajectories
+		z = self.model.encode(obs, task)
+		if self.cfg.num_pi_trajs > 0:
+			pi_actions = torch.empty(self.cfg.horizon, self.cfg.num_pi_trajs, self.cfg.action_dim, device=self.device)
+			_z = z.repeat(self.cfg.num_pi_trajs, 1)
+			for t in range(self.cfg.horizon-1):
+				pi_actions[t], _ = self.model.pi(_z, task)
+				_z = self.model.next(_z, pi_actions[t], task)
+			pi_actions[-1], _ = self.model.pi(_z, task)
 
-        Returns:
-            torch.Tensor: Action to take in the environment.
-        """
-        # Sample policy trajectories
-        z = self.model.encode(obs, task)
-        if self.cfg.num_pi_trajs > 0:
-            pi_actions = torch.empty(self.cfg.horizon, self.cfg.num_pi_trajs, self.cfg.action_dim, device=self.device)
-            _z = z.repeat(self.cfg.num_pi_trajs, 1)
-            for t in range(self.cfg.horizon-1):
-                pi_actions[t], _ = self.model.pi(_z, task)
-                _z = self.model.next(_z, pi_actions[t], task)
-            pi_actions[-1], _ = self.model.pi(_z, task)
+		# Initialize state and parameters
+		z = z.repeat(self.cfg.num_samples, 1)
+		mean = torch.zeros(self.cfg.horizon, self.cfg.action_dim, device=self.device)
+		std = torch.full((self.cfg.horizon, self.cfg.action_dim), self.cfg.max_std, dtype=torch.float, device=self.device)
+		if not t0:
+			mean[:-1] = self._prev_mean[1:]
+		actions = torch.empty(self.cfg.horizon, self.cfg.num_samples, self.cfg.action_dim, device=self.device)
+		if self.cfg.num_pi_trajs > 0:
+			actions[:, :self.cfg.num_pi_trajs] = pi_actions
 
-        # Initialize state and parameters
-        z = z.repeat(self.cfg.num_samples, 1)
-        mean = torch.zeros(self.cfg.horizon, self.cfg.action_dim, device=self.device)
-        std = torch.full((self.cfg.horizon, self.cfg.action_dim), self.cfg.max_std, dtype=torch.float, device=self.device)
-        if not t0:
-            mean[:-1] = self._prev_mean[1:]
-        actions = torch.empty(self.cfg.horizon, self.cfg.num_samples, self.cfg.action_dim, device=self.device)
-        if self.cfg.num_pi_trajs > 0:
-            actions[:, :self.cfg.num_pi_trajs] = pi_actions
+		# Iterate MPPI
+		for _ in range(self.cfg.iterations):
 
-        # Iterate MPPI
-        for _ in range(self.cfg.iterations):
+			# Sample actions
+			r = torch.randn(self.cfg.horizon, self.cfg.num_samples-self.cfg.num_pi_trajs, self.cfg.action_dim, device=std.device)
+			actions_sample = mean.unsqueeze(1) + std.unsqueeze(1) * r
+			actions_sample = actions_sample.clamp(-1, 1)
+			actions[:, self.cfg.num_pi_trajs:] = actions_sample
+			if self.cfg.multitask:
+				actions = actions * self.model._action_masks[task]
 
-            # Sample actions
-            r = torch.randn(self.cfg.horizon, self.cfg.num_samples-self.cfg.num_pi_trajs, self.cfg.action_dim, device=std.device)
-            actions_sample = mean.unsqueeze(1) + std.unsqueeze(1) * r
-            actions_sample = actions_sample.clamp(-1, 1)
-            actions[:, self.cfg.num_pi_trajs:] = actions_sample
-            if self.cfg.multitask:
-                actions = actions * self.model._action_masks[task]
+			# Compute elite actions
+			value = self._estimate_value(z, actions, task).nan_to_num(0)
+			elite_idxs = torch.topk(value.squeeze(1), self.cfg.num_elites, dim=0).indices
+			elite_value, elite_actions = value[elite_idxs], actions[:, elite_idxs]
 
-            # Compute elite actions
-            value = self._estimate_value(z, actions, task).nan_to_num(0)
-            elite_idxs = torch.topk(value.squeeze(1), self.cfg.num_elites, dim=0).indices
-            elite_value, elite_actions = value[elite_idxs], actions[:, elite_idxs]
+			# Update parameters
+			max_value = elite_value.max(0).values
+			score = torch.exp(self.cfg.temperature*(elite_value - max_value))
+			score = score / score.sum(0)
+			mean = (score.unsqueeze(0) * elite_actions).sum(dim=1) / (score.sum(0) + 1e-9)
+			std = ((score.unsqueeze(0) * (elite_actions - mean.unsqueeze(1)) ** 2).sum(dim=1) / (score.sum(0) + 1e-9)).sqrt()
+			std = std.clamp(self.cfg.min_std, self.cfg.max_std)
+			if self.cfg.multitask:
+				mean = mean * self.model._action_masks[task]
+				std = std * self.model._action_masks[task]
 
-            # Update parameters
-            max_value = elite_value.max(0).values
-            score = torch.exp(self.cfg.temperature*(elite_value - max_value))
-            score = score / score.sum(0)
-            mean = (score.unsqueeze(0) * elite_actions).sum(dim=1) / (score.sum(0) + 1e-9)
-            std = ((score.unsqueeze(0) * (elite_actions - mean.unsqueeze(1)) ** 2).sum(dim=1) / (score.sum(0) + 1e-9)).sqrt()
-            std = std.clamp(self.cfg.min_std, self.cfg.max_std)
-            if self.cfg.multitask:
-                mean = mean * self.model._action_masks[task]
-                std = std * self.model._action_masks[task]
+		# Select action
+		rand_idx = math.gumbel_softmax_sample(score.squeeze(1))
+		actions = torch.index_select(elite_actions, 1, rand_idx).squeeze(1)
+		a, std = actions[0], std[0]
+		if not eval_mode:
+			a = a + std * torch.randn(self.cfg.action_dim, device=std.device)
+		self._prev_mean.copy_(mean)
+		return a.clamp(-1, 1)
 
-        # Select action
-        rand_idx = math.gumbel_softmax_sample(score.squeeze(1))
-        actions = torch.index_select(elite_actions, 1, rand_idx).squeeze(1)
-        a, std = actions[0], std[0]
-        if not eval_mode:
-            a = a + std * torch.randn(self.cfg.action_dim, device=std.device)
-        self._prev_mean.copy_(mean)
-        return a.clamp(-1, 1)
+	def update_pi(self, zs, task):
+		"""
+		Update policy using a sequence of latent states.
 
-    def update_pi(self, zs, task):
-        """
-        Update policy using a sequence of latent states.
+		Args:
+			zs (torch.Tensor): Sequence of latent states.
+			task (torch.Tensor): Task index (only used for multi-task experiments).
 
-        Args:
-            zs (torch.Tensor): Sequence of latent states.
-            task (torch.Tensor): Task index (only used for multi-task experiments).
+		Returns:
+			float: Loss of the policy update.
+		"""
+		action, info = self.model.pi(zs, task)
+		qs = self.model.Q(zs, action, task, return_type='avg', detach=True)
+		self.scale.update(qs[0])
+		qs = self.scale(qs)
 
-        Returns:
-            float: Loss of the policy update.
-        """
-        action, info = self.model.pi(zs, task)
-        qs = self.model.Q(zs, action, task, return_type='avg', detach=True)
-        self.scale.update(qs[0])
-        qs = self.scale(qs)
+		# Loss is a weighted sum of Q-values
+		rho = torch.pow(self.cfg.rho, torch.arange(len(qs), device=self.device))
+		pi_loss = (-(self.cfg.entropy_coef * info["scaled_entropy"] + qs).mean(dim=(1,2)) * rho).mean()
+		pi_loss.backward()
+		pi_grad_norm = torch.nn.utils.clip_grad_norm_(self.model._pi.parameters(), self.cfg.grad_clip_norm)
+		self.pi_optim.step()
+		self.pi_optim.zero_grad(set_to_none=True)
 
-        # Loss is a weighted sum of Q-values
-        rho = torch.pow(self.cfg.rho, torch.arange(len(qs), device=self.device))
-        pi_loss = (-(self.cfg.entropy_coef * info["scaled_entropy"] + qs).mean(dim=(1,2)) * rho).mean()
-        pi_loss.backward()
-        pi_grad_norm = torch.nn.utils.clip_grad_norm_(self.model._pi.parameters(), self.cfg.grad_clip_norm)
-        self.pi_optim.step()
-        self.pi_optim.zero_grad(set_to_none=True)
+		info = TensorDict({
+			"pi_loss": pi_loss,
+			"pi_grad_norm": pi_grad_norm,
+			"pi_entropy": info["entropy"],
+			"pi_scaled_entropy": info["scaled_entropy"],
+			"pi_scale": self.scale.value,
+		})
+		return info
 
-        info = TensorDict({
-            "pi_loss": pi_loss,
-            "pi_grad_norm": pi_grad_norm,
-            "pi_entropy": info["entropy"],
-            "pi_scaled_entropy": info["scaled_entropy"],
-            "pi_scale": self.scale.value,
-        })
-        return info
+	@torch.no_grad()
+	def _td_target(self, next_z, reward, terminated, task):
+		"""
+		Compute the TD-target from a reward and the observation at the following time step.
 
-    @torch.no_grad()
-    def _td_target(self, next_z, reward, terminated, task):
-        """
-        Compute the TD-target from a reward and the observation at the following time step.
+		Args:
+			next_z (torch.Tensor): Latent state at the following time step.
+			reward (torch.Tensor): Reward at the current time step.
+			terminated (torch.Tensor): Termination signal at the current time step.
+			task (torch.Tensor): Task index (only used for multi-task experiments).
 
-        Args:
-            next_z (torch.Tensor): Latent state at the following time step.
-            reward (torch.Tensor): Reward at the current time step.
-            terminated (torch.Tensor): Termination signal at the current time step.
-            task (torch.Tensor): Task index (only used for multi-task experiments).
+		Returns:
+			torch.Tensor: TD-target.
+		"""
+		action, _ = self.model.pi(next_z, task)
+		discount = self.discount[task].unsqueeze(-1) if self.cfg.multitask else self.discount
+		return reward + discount * (1-terminated) * self.model.Q(next_z, action, task, return_type='min', target=True)
 
-        Returns:
-            torch.Tensor: TD-target.
-        """
-        action, _ = self.model.pi(next_z, task)
-        discount = self.discount[task].unsqueeze(-1) if self.cfg.multitask else self.discount
-        return reward + discount * (1-terminated) * self.model.Q(next_z, action, task, return_type='min', target=True)
+	def _plot_decoder_loss(self):
+		"""Generates and saves a plot of the decoder loss."""
+		try:
+			fig, ax = plt.subplots(figsize=(10, 5))
+			ax.plot(self.decoder_steps, self.decoder_losses)
+			ax.set_xlabel("Training Step")
+			ax.set_ylabel("MSE Loss")
+			ax.set_title("Decoder Loss Curve")
+			ax.grid(True)
+			plt.savefig(self.decoder_curve_file, bbox_inches='tight')
+			plt.close(fig)
+		except Exception as e:
+			print(f"Warning: Could not plot decoder loss curve. Error: {e}")
 
-    def _plot_decoder_loss(self):
-        """Generates and saves a plot of the decoder loss."""
-        try:
-            fig, ax = plt.subplots(figsize=(10, 5))
-            ax.plot(self.decoder_steps, self.decoder_losses)
-            ax.set_xlabel("Training Step")
-            ax.set_ylabel("MSE Loss")
-            ax.set_title("Decoder Loss Curve")
-            ax.grid(True)
-            plt.savefig(self.decoder_curve_file, bbox_inches='tight')
-            plt.close(fig)
-        except Exception as e:
-            print(f"Warning: Could not plot decoder loss curve. Error: {e}")
+	def _update(self, obs, action, reward, terminated, q_mask=None, task=None, step=None, pretrain_step=-1):
+		# Prepare for update
+		self.model.train()
 
-    def _update(self, obs, action, reward, terminated, q_mask=None, task=None, step=None, pretrain_step=-1):
-        # Prepare for update
-        self.model.train()
+		# train decoder independently, ONLY if obs type is 'rgb'
+		if self.cfg.obs == 'rgb' and getattr(self.cfg, "enable_decoder", False) and (step % self.cfg.decoder_freq == 0):
+			
+			# The full input (e.g., 9 channels) is used for reconstruction.
+			rgb_in = obs[0].to(self.device)
 
-        # train decoder independently, ONLY if obs type is 'rgb'
-        if self.cfg.obs == 'rgb' and getattr(self.cfg, "enable_decoder", False) and (step % self.cfg.decoder_freq == 0):
-            
-            # The full input (e.g., 9 channels) is used for reconstruction.
-            rgb_in = obs[0].to(self.device)
+			# Normalize the full input to be the target. No slicing is needed anymore.
+			rgb_norm = (rgb_in.float() / 255.0 - 0.5) * 2  # normalize to [-1,1]
+			
+			# Encoder still gets the full input to generate z.
+			with torch.no_grad():
+				z_detached = self.model.encode(obs[0], task=None).detach()
+			
+			# Decoder now predicts the full input (e.g., 9 channels).
+			pred_rgb = self.decoder(z_detached)
 
-            # Normalize the full input to be the target. No slicing is needed anymore.
-            rgb_norm = (rgb_in.float() / 255.0 - 0.5) * 2  # normalize to [-1,1]
-            
-            # Encoder still gets the full input to generate z.
-            with torch.no_grad():
-                z_detached = self.model.encode(obs[0], task=None).detach()
-            
-            # Decoder now predicts the full input (e.g., 9 channels).
-            pred_rgb = self.decoder(z_detached)
+			# The loss is now a direct comparison between the 9-channel prediction and the 9-channel target.
+			dec_loss = F.mse_loss(pred_rgb, rgb_norm)
+			
+			self.decoder_opt.zero_grad(set_to_none=True)
+			dec_loss.backward()
+			self.decoder_opt.step()
 
-            # The loss is now a direct comparison between the 9-channel prediction and the 9-channel target.
-            dec_loss = F.mse_loss(pred_rgb, rgb_norm)
-            
-            self.decoder_opt.zero_grad(set_to_none=True)
-            dec_loss.backward()
-            self.decoder_opt.step()
+			# Store data for plotting
+			self.decoder_steps.append(step)
+			self.decoder_losses.append(dec_loss.item())
 
-            # Store data for plotting
-            self.decoder_steps.append(step)
-            self.decoder_losses.append(dec_loss.item())
+			# Log the loss to file
+			with self.decoder_loss_file.open("a") as f:
+				f.write(f"{step},{dec_loss.item():.6f}\n")
 
-            # Log the loss to file
-            with self.decoder_loss_file.open("a") as f:
-                f.write(f"{step},{dec_loss.item():.6f}\n")
+			# Periodically update and save the loss curve plot
+			if len(self.decoder_steps) > 1 and step > 0 and step % self.cfg.monitor_freq == 0:
+				self._plot_decoder_loss()
 
-            # Periodically update and save the loss curve plot
-            if len(self.decoder_steps) > 1 and step > 0 and step % self.cfg.monitor_freq == 0:
-                self._plot_decoder_loss()
+			if hasattr(self, "logger"):
+				self.logger.log("decoder_loss", dec_loss.item(), step)
+		
+		#####end of decoder training
+		
+		# Compute targets
+		if self.cfg.JEPA_sg:
+			# Encode next_z without gradients (original behavior)
+			with torch.no_grad():
+				next_z = self.model.encode(obs[1:], task)
+				td_targets = self._td_target(next_z, reward, terminated, task)
+		else:
+			# Encode next_z with gradients enabled
+			next_z = self.model.encode(obs[1:], task)
+			with torch.no_grad():
+				td_targets = self._td_target(next_z, reward, terminated, task)
 
-            if hasattr(self, "logger"):
-                self.logger.log("decoder_loss", dec_loss.item(), step)
-        
-        #####end of decoder training
-        
-        # Compute targets
-        if self.cfg.JEPA_sg:
-            # Encode next_z without gradients (original behavior)
-            with torch.no_grad():
-                next_z = self.model.encode(obs[1:], task)
-                td_targets = self._td_target(next_z, reward, terminated, task)
-        else:
-            # Encode next_z with gradients enabled
-            next_z = self.model.encode(obs[1:], task)
-            with torch.no_grad():
-                td_targets = self._td_target(next_z, reward, terminated, task)
+		# Latent rollout
+		zs = torch.empty(self.cfg.horizon+1, self.cfg.batch_size, self.cfg.latent_dim, device=self.device)
+		z = self.model.encode(obs[0], task)
+		zs[0] = z
+		consistency_loss = 0
+		for t, (_action, _next_z) in enumerate(zip(action.unbind(0), next_z.unbind(0))):
+			z = self.model.next(z, _action, task)
+			consistency_loss = consistency_loss + F.mse_loss(z, _next_z) * self.cfg.rho**t
+			zs[t+1] = z
 
-        # Latent rollout
-        zs = torch.empty(self.cfg.horizon+1, self.cfg.batch_size, self.cfg.latent_dim, device=self.device)
-        z = self.model.encode(obs[0], task)
-        zs[0] = z
-        consistency_loss = 0
-        for t, (_action, _next_z) in enumerate(zip(action.unbind(0), next_z.unbind(0))):
-            z = self.model.next(z, _action, task)
-            consistency_loss = consistency_loss + F.mse_loss(z, _next_z) * self.cfg.rho**t
-            zs[t+1] = z
+		# Predictions
+		_zs = zs[:-1]
+		if self.cfg.grad_from_Q:
+			_zs_q = _zs
+		else:
+			_zs_q = _zs.detach()
+		qs = self.model.Q(_zs_q, action, task, return_type='all')
+		if self.cfg.grad_from_R:
+			_zs_r = _zs
+		else:
+			_zs_r = _zs.detach()
+		reward_preds = self.model.reward(_zs_r, action, task)
+		if self.cfg.episodic:
+			if self.cfg.grad_from_Q or self.cfg.grad_from_R or self.cfg.grad_from_policy or self.cfg.collapse_prevention:
+				termination_pred = self.model.termination(zs[1:].detach(), task, unnormalized=True)
+			else:
+				termination_pred = self.model.termination(zs[1:], task, unnormalized=True)
 
-        # Predictions
-        _zs = zs[:-1]
-        if self.cfg.grad_from_Q:
-            _zs_q = _zs
-        else:
-            _zs_q = _zs.detach()
-        qs = self.model.Q(_zs_q, action, task, return_type='all')
-        if self.cfg.grad_from_R:
-            _zs_r = _zs
-        else:
-            _zs_r = _zs.detach()
-        reward_preds = self.model.reward(_zs_r, action, task)
-        if self.cfg.episodic:
-            if self.cfg.grad_from_Q or self.cfg.grad_from_R or self.cfg.grad_from_policy or self.cfg.collapse_prevention:
-                termination_pred = self.model.termination(zs[1:].detach(), task, unnormalized=True)
-            else:
-                termination_pred = self.model.termination(zs[1:], task, unnormalized=True)
+		# Compute losses
+		reward_loss, value_loss = 0, 0
+		
+		for t, (rew_pred_unbind, rew_unbind, td_targets_unbind, qs_unbind) in enumerate(zip(reward_preds.unbind(0), reward.unbind(0), td_targets.unbind(0), qs.unbind(1))):
+			reward_loss = reward_loss + math.soft_ce(rew_pred_unbind, rew_unbind, self.cfg).mean() * self.cfg.rho**t
+			
+			# Apply Q-function mask to value loss if available
+			for _, qs_unbind_unbind in enumerate(qs_unbind.unbind(0)):
+				q_loss = math.soft_ce(qs_unbind_unbind, td_targets_unbind, self.cfg)
+				if q_mask is not None:
+					# Apply mask to Q-function loss
+					q_loss = q_loss * q_mask.float()
+					# Normalize by number of visible samples to maintain loss scale
+					q_loss = q_loss.sum() / q_mask.sum().float().clamp(min=1.0)
+				else:
+					q_loss = q_loss.mean()
+				value_loss = value_loss + q_loss * self.cfg.rho**t
 
-        # Compute losses
-        reward_loss, value_loss = 0, 0
-        
-        for t, (rew_pred_unbind, rew_unbind, td_targets_unbind, qs_unbind) in enumerate(zip(reward_preds.unbind(0), reward.unbind(0), td_targets.unbind(0), qs.unbind(1))):
-            reward_loss = reward_loss + math.soft_ce(rew_pred_unbind, rew_unbind, self.cfg).mean() * self.cfg.rho**t
-            
-            # Apply Q-function mask to value loss if available
-            for _, qs_unbind_unbind in enumerate(qs_unbind.unbind(0)):
-                q_loss = math.soft_ce(qs_unbind_unbind, td_targets_unbind, self.cfg)
-                if q_mask is not None:
-                    # Apply mask to Q-function loss
-                    q_loss = q_loss * q_mask.float()
-                    # Normalize by number of visible samples to maintain loss scale
-                    q_loss = q_loss.sum() / q_mask.sum().float().clamp(min=1.0)
-                else:
-                    q_loss = q_loss.mean()
-                value_loss = value_loss + q_loss * self.cfg.rho**t
+		consistency_loss = consistency_loss / self.cfg.horizon
+		reward_loss = reward_loss / self.cfg.horizon
+		if self.cfg.episodic:
+			termination_loss = F.binary_cross_entropy_with_logits(termination_pred, terminated)
+		else:
+			termination_loss = 0.
 
-        consistency_loss = consistency_loss / self.cfg.horizon
-        reward_loss = reward_loss / self.cfg.horizon
-        if self.cfg.episodic:
-            termination_loss = F.binary_cross_entropy_with_logits(termination_pred, terminated)
-        else:
-            termination_loss = 0.
+		# Collapse prevention loss using random function predictor
+		collapse_prevention_coef = self.cfg.collapse_prevention_coef
+		if self.cfg.collapse_prevention and collapse_prevention_coef > 0:
+			# Flatten time and batch dimensions to use the entire sequence
+			T_seq, B = obs.shape[0], obs.shape[1]
+			obs_flat = obs.view(-1, *obs.shape[2:]).to(dtype=torch.float32)  # ((T)*B, ...)
+			zs_flat = zs.view(-1, zs.shape[-1])                  # ((T)*B, latent_dim)
+			random_target = self.model._random_fn(obs_flat).detach()  # ((T)*B, D)
+			pred_target = self.model._collapse_pred(zs_flat)          # ((T)*B, D)
+			# Apply Q-sampling mask across batch dimension for every timestep
+			if q_mask is not None:
+				mask = q_mask.unsqueeze(0).expand(T_seq, B).reshape(-1)
+				pred_target = pred_target[mask]
+				random_target = random_target[mask]
+			collapse_loss = F.mse_loss(pred_target, random_target) / T_seq
+		else:
+			collapse_loss = torch.tensor(0.0, device=self.device)
 
-        # Collapse prevention loss using random function predictor
-        collapse_prevention_coef = self.cfg.collapse_prevention_coef
-        if self.cfg.collapse_prevention and collapse_prevention_coef > 0:
-            # Flatten time and batch dimensions to use the entire sequence
-            T_seq, B = obs.shape[0], obs.shape[1]
-            obs_flat = obs.view(-1, *obs.shape[2:]).to(dtype=torch.float32)  # ((T)*B, ...)
-            zs_flat = zs.view(-1, zs.shape[-1])                  # ((T)*B, latent_dim)
-            random_target = self.model._random_fn(obs_flat).detach()  # ((T)*B, D)
-            pred_target = self.model._collapse_pred(zs_flat)          # ((T)*B, D)
-            # Apply Q-sampling mask across batch dimension for every timestep
-            if q_mask is not None:
-                mask = q_mask.unsqueeze(0).expand(T_seq, B).reshape(-1)
-                pred_target = pred_target[mask]
-                random_target = random_target[mask]
-            collapse_loss = F.mse_loss(pred_target, random_target) / T_seq
-        else:
-            collapse_loss = torch.tensor(0.0, device=self.device)
+		value_loss = value_loss / (self.cfg.horizon * self.cfg.num_q)
+		
+		# Compute policy loss
+		if self.cfg.grad_from_policy:
+			zs_for_pi = zs
+		else:
+			zs_for_pi = zs.detach()
+		
+		action_pi, info_pi = self.model.pi(zs_for_pi, task)
+		qs_pi = self.model.Q(zs_for_pi, action_pi, task, return_type='avg', detach=True)
+		self.scale.update(qs_pi[0])
+		qs_pi = self.scale(qs_pi)
+		rho = torch.pow(self.cfg.rho, torch.arange(len(qs_pi), device=self.device))
+		pi_loss = (-(self.cfg.entropy_coef * info_pi["scaled_entropy"] + qs_pi).mean(dim=(1,2)) * rho).mean()
 
-        value_loss = value_loss / (self.cfg.horizon * self.cfg.num_q)
-        
-        # Compute policy loss
-        if self.cfg.grad_from_policy:
-            zs_for_pi = zs
-        else:
-            zs_for_pi = zs.detach()
-        
-        action_pi, info_pi = self.model.pi(zs_for_pi, task)
-        qs_pi = self.model.Q(zs_for_pi, action_pi, task, return_type='avg', detach=True)
-        self.scale.update(qs_pi[0])
-        qs_pi = self.scale(qs_pi)
-        rho = torch.pow(self.cfg.rho, torch.arange(len(qs_pi), device=self.device))
-        pi_loss = (-(self.cfg.entropy_coef * info_pi["scaled_entropy"] + qs_pi).mean(dim=(1,2)) * rho).mean()
-        
-        # check if the condition (Exist) holds
-        # if (self.cfg.exist_check_freq and (step+1) % self.cfg.exist_check_freq == 0):
-        #     # pick one 'advantaged' state and ~32 'others' from the batch
-        # 	batch_states = obs[0]                # shape (B, …)
-        # 	if batch_states.size(0) > 1:         # need at least 2 states
-        # 		print("Checking if the condition (Exist) holds...")
-        # 		s_a = batch_states[0]
-        # 		other_states = batch_states[1 : 33]   # up to 32 "others"
+		if self.cfg.ortho_reg:
+			# Concatenate all observations from the sequence to avoid bias toward initial observations
+			# obs shape: (horizon+1, batch_size, ...) -> (batch_size * (horizon+1), ...)
+			all_obs = obs.view(-1, *obs.shape[2:])  # Flatten first two dimensions
+			ortho_loss = orthogonality_regularization(
+				self.model._encoder[self.cfg.obs], all_obs, device=self.device, latent_dim=self.cfg.latent_dim
+			)
+			if self.cfg.monitor_freq and (step+1) % self.cfg.monitor_freq == 0:
+				print(f"Orthogonality loss: {ortho_loss.item():.6e}")
 
-        # 		ok, sigma = exist_condition_holds(
-        # 			encoder=self.model._encoder[self.cfg.obs],   # <-- pass the specific encoder for the observation type
-        # 			s_a=s_a,
-        # 			other_obs=other_states,
-        # 			tol=self.cfg.exist_tol,
-        # 			device=self.device
-        # 		)
-        # 		print(f"Exist condition holds: {ok}, sigma_min: {sigma:.3e}")
-        # 		# encoding_space_s = encoding_space_size(self.model._encoder[self.cfg.obs], batch_states)
-        # 		# print(f"Encoding space size: {encoding_space_s:.3e}")
+		if self.cfg.full_rank_reg:
+			# Concatenate all observations from the sequence to avoid bias toward initial observations
+			# obs shape: (horizon+1, batch_size, ...) -> (batch_size * (horizon+1), ...)
+			all_obs = obs.view(-1, *obs.shape[2:])  # Flatten first two dimensions
+			fr_loss, abs_det = full_rank_regularization(
+				self.model._encoder[self.cfg.obs], all_obs, device=self.device, latent_dim=self.cfg.latent_dim,
+				num_samples=self.cfg.full_rank_reg_num_samples
+			)
+			if self.cfg.monitor_freq and (step+1) % self.cfg.monitor_freq == 0:
+				print(f"Full rank loss: {abs_det.item():.6e}")
 
-        if self.cfg.ortho_reg:
-            # Concatenate all observations from the sequence to avoid bias toward initial observations
-            # obs shape: (horizon+1, batch_size, ...) -> (batch_size * (horizon+1), ...)
-            all_obs = obs.view(-1, *obs.shape[2:])  # Flatten first two dimensions
-            ortho_loss = orthogonality_regularization(
-                self.model._encoder[self.cfg.obs], all_obs, device=self.device, latent_dim=self.cfg.latent_dim
-            )
-            if self.cfg.monitor_freq and (step+1) % self.cfg.monitor_freq == 0:
-                print(f"Orthogonality loss: {ortho_loss.item():.6e}")
+		# Combine all losses
+		total_loss = (
+			self.cfg.consistency_coef * consistency_loss +
+			self.cfg.reward_coef * reward_loss +
+			self.cfg.termination_coef * termination_loss +
+			self.cfg.value_coef * value_loss +
+			self.cfg.pi_coef * pi_loss +  # Add policy loss to total
+			collapse_prevention_coef * collapse_loss
+		)
 
-        if self.cfg.full_rank_reg:
-            # Concatenate all observations from the sequence to avoid bias toward initial observations
-            # obs shape: (horizon+1, batch_size, ...) -> (batch_size * (horizon+1), ...)
-            all_obs = obs.view(-1, *obs.shape[2:])  # Flatten first two dimensions
-            fr_loss, abs_det = full_rank_regularization(
-                self.model._encoder[self.cfg.obs], all_obs, device=self.device, latent_dim=self.cfg.latent_dim,
-                num_samples=self.cfg.full_rank_reg_num_samples
-            )
-            if self.cfg.monitor_freq and (step+1) % self.cfg.monitor_freq == 0:
-                print(f"Full rank loss: {abs_det.item():.6e}")
+		if self.cfg.ortho_reg:
+			total_loss = total_loss + self.cfg.ortho_reg_coef * ortho_loss
+		if self.cfg.full_rank_reg:
+			total_loss = total_loss + self.cfg.full_rank_reg_coef * fr_loss
 
-        # Combine all losses
-        total_loss = (
-            self.cfg.consistency_coef * consistency_loss +
-            self.cfg.reward_coef * reward_loss +
-            self.cfg.termination_coef * termination_loss +
-            self.cfg.value_coef * value_loss +
-            self.cfg.pi_coef * pi_loss +  # Add policy loss to total
-            collapse_prevention_coef * collapse_loss
-        )
+		# Single backward pass for all losses
+		total_loss.backward()
+		
+		# Update both model and policy
+		grad_norm = torch.nn.utils.clip_grad_norm_(self.model.parameters(), self.cfg.grad_clip_norm)
+		pi_grad_norm = torch.nn.utils.clip_grad_norm_(self.model._pi.parameters(), self.cfg.grad_clip_norm)
+		
+		self.optim.step()
+		self.pi_optim.step()
+		
+		self.optim.zero_grad(set_to_none=True)
+		self.pi_optim.zero_grad(set_to_none=True)
 
-        if self.cfg.ortho_reg:
-            total_loss = total_loss + self.cfg.ortho_reg_coef * ortho_loss
-        if self.cfg.full_rank_reg:
-            total_loss = total_loss + self.cfg.full_rank_reg_coef * fr_loss
+		# Update target Q-functions
+		self.model.soft_update_target_Q()
 
-        # Single backward pass for all losses
-        total_loss.backward()
-        
-        # Update both model and policy
-        grad_norm = torch.nn.utils.clip_grad_norm_(self.model.parameters(), self.cfg.grad_clip_norm)
-        pi_grad_norm = torch.nn.utils.clip_grad_norm_(self.model._pi.parameters(), self.cfg.grad_clip_norm)
-        
-        self.optim.step()
-        self.pi_optim.step()
-        
-        self.optim.zero_grad(set_to_none=True)
-        self.pi_optim.zero_grad(set_to_none=True)
+		# Return training statistics
+		self.model.eval()
+		info = TensorDict({
+			"consistency_loss": consistency_loss,
+			"reward_loss": reward_loss,
+			"value_loss": value_loss,
+			"termination_loss": termination_loss,
+			"total_loss": total_loss,
+			"collapse_loss": collapse_loss,
+			"grad_norm": grad_norm,
+			"pi_loss": pi_loss,
+			"pi_grad_norm": pi_grad_norm,
+			"pi_entropy": info_pi["entropy"],
+			"pi_scaled_entropy": info_pi["scaled_entropy"],
+			"pi_scale": self.scale.value,
+		})
+		if self.cfg.episodic:
+			info.update(math.termination_statistics(torch.sigmoid(termination_pred[-1]), terminated[-1]))
+		
+		# Monitor encoding space if available (simplified)
+		if hasattr(self, 'encoding_monitor') and self.encoding_monitor is not None and (pretrain_step < 0 or pretrain_step+1 == self.cfg.monitor_freq):
+			encoding_metrics = self.encoding_monitor.monitor_step(step)
+			if encoding_metrics:  # Only add if monitoring was performed
+				info.update({
+					f"encoding_{k}": v for k, v in encoding_metrics.items()
+					if k not in ['step']  # Avoid duplicate step info
+				})
+		
+		return info.detach().mean()
 
-        # Update target Q-functions
-        self.model.soft_update_target_Q()
+	def update(self, buffer, step, pretrain_step=-1):
+		"""
+		Main update function. Corresponds to one iteration of model learning.
 
-        # Return training statistics
-        self.model.eval()
-        info = TensorDict({
-            "consistency_loss": consistency_loss,
-            "reward_loss": reward_loss,
-            "value_loss": value_loss,
-            "termination_loss": termination_loss,
-            "total_loss": total_loss,
-            "collapse_loss": collapse_loss,
-            "grad_norm": grad_norm,
-            "pi_loss": pi_loss,
-            "pi_grad_norm": pi_grad_norm,
-            "pi_entropy": info_pi["entropy"],
-            "pi_scaled_entropy": info_pi["scaled_entropy"],
-            "pi_scale": self.scale.value,
-        })
-        if self.cfg.episodic:
-            info.update(math.termination_statistics(torch.sigmoid(termination_pred[-1]), terminated[-1]))
-        
-        # Monitor encoding space if available (simplified)
-        if hasattr(self, 'encoding_monitor') and self.encoding_monitor is not None and (pretrain_step < 0 or pretrain_step+1 == self.cfg.monitor_freq):
-            encoding_metrics = self.encoding_monitor.monitor_step(step)
-            if encoding_metrics:  # Only add if monitoring was performed
-                info.update({
-                    f"encoding_{k}": v for k, v in encoding_metrics.items()
-                    if k not in ['step']  # Avoid duplicate step info
-                })
-        
-        return info.detach().mean()
+		Args:
+			buffer (common.buffer.Buffer): Replay buffer.
 
-    def update(self, buffer, step, pretrain_step=-1):
-        """
-        Main update function. Corresponds to one iteration of model learning.
+		Returns:
+			dict: Dictionary of training statistics.
+		"""
+		obs, action, reward, terminated, task, q_mask = buffer.sample()
+		
+		# Now, `obs` is passed directly to _update without modification.
+		kwargs = {}
+		if task is not None:
+			kwargs["task"] = task
+		torch.compiler.cudagraph_mark_step_begin()
+		
+		# Run main update
+		update_info = self._update(obs, action, reward, terminated, q_mask=q_mask, **kwargs, step=step, pretrain_step=pretrain_step)
+		
+		# Compute visibility percentage
+		resident = buffer.resident_eps
+		visible_percent = 100.0 * buffer.q_visible_episodes / max(resident, 1)
+		if step % self.cfg.monitor_freq == 0 and pretrain_step < 1:
+			print(f"Q-visible episodes: {buffer.q_visible_episodes}/{resident} ({visible_percent:.1f}%) -> sample_ratio: {self.cfg.q_sample_ratio}")
+		# Log metric
+		update_info["q_visible_percent"] = torch.tensor(visible_percent, device=self.device)
 
-        Args:
-            buffer (common.buffer.Buffer): Replay buffer.
-
-        Returns:
-            dict: Dictionary of training statistics.
-        """
-        obs, action, reward, terminated, task, q_mask = buffer.sample()
-        
-        # Now, `obs` is passed directly to _update without modification.
-        kwargs = {}
-        if task is not None:
-            kwargs["task"] = task
-        torch.compiler.cudagraph_mark_step_begin()
-        
-        # Run main update
-        update_info = self._update(obs, action, reward, terminated, q_mask=q_mask, **kwargs, step=step, pretrain_step=pretrain_step)
-        
-        # Compute visibility percentage
-        resident = buffer.resident_eps
-        visible_percent = 100.0 * buffer.q_visible_episodes / max(resident, 1)
-        if step % self.cfg.monitor_freq == 0 and pretrain_step < 1:
-            print(f"Q-visible episodes: {buffer.q_visible_episodes}/{resident} ({visible_percent:.1f}%) -> sample_ratio: {self.cfg.q_sample_ratio}")
-        # Log metric
-        update_info["q_visible_percent"] = torch.tensor(visible_percent, device=self.device)
-
-        return update_info
+		return update_info
