@@ -32,19 +32,24 @@ class SimpleEncodingSpaceMonitor:
         env,
         device: str = "cuda",
         save_dir: Optional[str] = None,
-        agent = None
+        agent = None,
+        buffer = None,
     ):
         self.cfg = cfg
         self.encoder = encoder
         self.env = env
         self.device = device
         self.agent = agent
+        self.buffer = buffer  # replay buffer reference (may be None for offline use)
         self.save_dir = Path(save_dir) if save_dir else Path("simple_encoding_logs")
         self.save_dir.mkdir(exist_ok=True)
         
         # Monitoring configuration
         self.num_seed_obs = 64  # Number of diverse seed observations
         self.monitor_freq = self.cfg.get('monitor_freq', 2000)  # Monitor every N steps
+        # Dimension monitoring frequency & sample size
+        self.dim_monitor_steps = getattr(self.cfg, 'dim_monitor_steps', 5000)
+        self.enable_dim_monitor = True
         self.seeds = list(range(42, 42 + self.num_seed_obs))  # Fixed seeds for reproducibility
         
         # Metric enable/disable flags (default all enabled)
@@ -52,12 +57,48 @@ class SimpleEncodingSpaceMonitor:
         self.enable_jacobian_rank = getattr(self.cfg, 'monitor_jacobian_rank', True) 
         self.enable_rankme = getattr(self.cfg, 'monitor_rankme', True)
         self.enable_eval_reward = getattr(self.cfg, 'monitor_eval_reward', True)
+        self.enable_lipschitz = getattr(self.cfg, 'monitor_lipschitz', True)
         
         # Simple storage for monitoring data
         self.monitoring_data = {
             'steps': [],
             'timestamp': []
         }
+        
+        # Pre-allocate lists for dimension monitoring if enabled
+        if self.enable_dim_monitor:
+            self.monitoring_data['avg_dis_z'] = []
+            self.monitoring_data['min_dis_z'] = []
+            self.monitoring_data['avg_dis_p'] = []  # distances in Q-stack space
+            self.monitoring_data['min_dis_p'] = []
+            self.monitoring_data['est_dim_avg'] = []
+            self.monitoring_data['est_dim_min'] = []
+            self.monitoring_data['est_dim_p_avg'] = []
+            self.monitoring_data['est_dim_p_min'] = []
+        
+        # -----------------------------------------------------------------
+        # Pre-sample probe actions (fixed throughout run) for q-distance
+        # -----------------------------------------------------------------
+        self.M_actions = getattr(self.cfg, 'dim_probe_actions', 16)
+        action_dim = getattr(self.cfg, 'action_dim', None)
+        if action_dim is None and hasattr(self.cfg, 'action_dims'):
+            action_dim = self.cfg.action_dims[0]
+        if action_dim is None:
+            action_dim = 6  # sensible default
+        torch.manual_seed(1234)
+        probe_actions = []
+        for _ in range(self.M_actions):
+            # if hasattr(self.env, 'rand_act'):
+            a = self.env.rand_act()
+            if isinstance(a, torch.Tensor):
+                a = a.clone().detach().cpu().float()
+            else:
+                a = torch.from_numpy(a).float()
+            # else:
+                # a = torch.tensor(self.env.action_space.sample(), dtype=torch.float32)
+            probe_actions.append(a)
+        self._probe_actions = torch.stack(probe_actions, dim=0)  # (M, A)
+        torch.manual_seed(self.cfg.seed)
         
         # Add metric storage based on enabled flags
         if self.enable_encoding_space:
@@ -66,6 +107,8 @@ class SimpleEncodingSpaceMonitor:
             self.monitoring_data['min_jacobian_rank'] = []
         if self.enable_rankme:
             self.monitoring_data['rankme'] = []
+        if self.enable_lipschitz:
+            self.monitoring_data['lipschitz_K'] = []
         
         # -------------------------------------------------------------
         # RankMe setup (needed for baseline observation sampling)
@@ -305,7 +348,9 @@ class SimpleEncodingSpaceMonitor:
         Returns:
             Dictionary with encoding space size only
         """
-        if step % self.monitor_freq != 0:
+        # Determine whether to run monitoring at this step
+        if (step % self.monitor_freq != 0) and (step % self.dim_monitor_steps != 0):
+            # Neither encoding nor dimension monitoring is scheduled
             return {}
         
         # start_time = time.time()
@@ -345,6 +390,17 @@ class SimpleEncodingSpaceMonitor:
                     print(f"⚠️ Failed to compute RankMe: {e}")
             metrics['rankme'] = rankme_metric
             self.monitoring_data['rankme'].append(rankme_metric)
+        
+        # -------------------------------------------------------------
+        # Dimension monitoring (pairwise latent distance & estimated dim)
+        # -------------------------------------------------------------
+        if self.enable_dim_monitor and self.buffer is not None and (step % self.dim_monitor_steps == 0):
+            try:
+                dim_metrics = self._compute_full_dim_metrics()
+                if dim_metrics:
+                    metrics.update(dim_metrics)
+            except Exception as e:
+                print(f"⚠️ Failed to compute dimension metrics: {e}")
         
         # Auto-save periodically and generate updated plots
         if step % (self.monitor_freq * 5) == 0:
@@ -569,8 +625,207 @@ class SimpleEncodingSpaceMonitor:
 """
         return report
 
+    def _compute_full_dim_metrics(self) -> Dict[str, float]:
+        """Compute dimension metrics using *all* observations currently stored in the replay buffer."""
+        if self.buffer is None or self.buffer.num_eps == 0:
+            print("⚠️ No data in buffer – skipping full-dataset dimension analysis.")
+            return {}
+
+        try:
+            # Attempt to access internal storage directly (TorchRL LazyTensorStorage)
+            storage = self.buffer._buffer._storage  # type: ignore
+            total_steps = self.buffer._steps_in_buffer  # type: ignore
+            td_all = storage[:total_steps]  # TensorDict slice containing all stored steps
+            obs_tensor = td_all.get('obs', None)
+            if obs_tensor is None:
+                print("⚠️ Buffer storage does not contain 'obs' field – cannot compute dimension metrics.")
+                return {}
+
+            # Flatten to (N, C, H, W)
+            if obs_tensor.ndim > 4:
+                obs_tensor = obs_tensor.view(-1, *obs_tensor.shape[-3:])
+
+            # -------------------------------------------------
+            # 1.5  Encode observations in manageable batches
+            # -------------------------------------------------
+            encode_batch = getattr(self.cfg, 'dim_encode_batch_size', 4096)
+            enc_list = []
+            with torch.no_grad():
+                for start in range(0, obs_tensor.shape[0], encode_batch):
+                    batch_obs = obs_tensor[start:start+encode_batch].to(self.device)
+                    enc = self.agent.model.encode(batch_obs, task=None)
+                    enc_list.append(enc.cpu())  # move to CPU to free GPU mem quickly
+                    del batch_obs, enc
+                    torch.cuda.empty_cache()
+
+            z = torch.cat(enc_list, dim=0).to(self.device)
+            del enc_list, obs_tensor
+            torch.cuda.empty_cache()
+
+            N = z.shape[0]
+            if N < 2:
+                print("⚠️ Not enough observations for full-dataset analysis.")
+                return {}
+
+            # -------------------------------------------------
+            # 3. Build stacked q outputs P(s) for probe actions
+            # -------------------------------------------------
+            probe_actions = self._probe_actions.to(self.device)  # (M, A)
+            num_bins = getattr(self.cfg, 'num_bins', 101)
+
+            q_list = []  # will collect on GPU then CPU
+
+            batch_q = encode_batch  # compute q in chunks
+            with torch.no_grad():
+                for start in range(0, N, batch_q):
+                    z_chunk = z[start:start+batch_q]  # (B, latent_dim)
+                    Bc = z_chunk.shape[0]
+                    # Expand for M actions
+                    z_rep = z_chunk.unsqueeze(1).repeat(1, self.M_actions, 1)
+                    a_rep = probe_actions.unsqueeze(0).repeat(Bc, 1, 1)
+                    z_flat = z_rep.reshape(-1, z.shape[1])
+                    a_flat = a_rep.reshape(-1, a_rep.shape[-1])
+
+                    q_out = self.agent.model.Q(z_flat, a_flat, task=None, return_type='all', detach=True)
+                    q_out = q_out.mean(0)  # (B*M, num_bins) – average over ensemble
+                    q_out = q_out.view(Bc, self.M_actions, num_bins).mean(1)  # (B, num_bins) average over actions
+                    q_list.append(q_out)
+
+            P = torch.cat(q_list, dim=0)  # (N, M*num_bins)
+
+            # -------------------------------------------------
+            # 4. Compute pairwise distances for z and P
+            # -------------------------------------------------
+            pdists = torch.cdist(z, z)  # (N, N)
+            triu = torch.triu_indices(N, N, offset=1)
+            d_vals = pdists[triu[0], triu[1]]
+            avg_dis = float(d_vals.mean().item())
+            min_dis = float(d_vals.min().item())
+            # P distances
+            pdists_p = torch.cdist(P, P)  # (N,N)
+            d_vals_p = pdists_p[triu[0], triu[1]]
+            avg_dis_p = float(d_vals_p.mean().item())
+            min_dis_p = float(d_vals_p.min().item())
+
+            # Free memory
+            del pdists, pdists_p, d_vals_p, d_vals
+            torch.cuda.empty_cache()
+
+            # -------------------------------------------------
+            # 5. Radius R and dimensionality estimate (z)
+            # -------------------------------------------------
+            R = float(z.norm(dim=1).max().item())
+            eps = 1e-8
+            try:
+                est_dim_avg = float(np.log(max(N, 2)) / np.log(1 + 2 * R / (avg_dis + eps))) if avg_dis > eps else float('nan')
+            except ZeroDivisionError:
+                est_dim_avg = float('nan')
+            est_dim_min = float(np.log(max(N, 2)) / np.log(1 + 2 * R / (min_dis + eps))) if min_dis > eps else float('nan')
+
+            # -------------------------------------------------
+            # 5b. Lipschitz constant estimation (subset of z)
+            # -------------------------------------------------
+            if self.enable_lipschitz:
+                K_est = self._estimate_lipschitz(z)
+                self.monitoring_data['lipschitz_K'].append(K_est)
+                print(f"🧮 Estimated Lipschitz K_theta (full): {K_est:.4f}")
+
+            # -------------------------------------------------
+            # 5c. Dimension estimates based on P-space distances & Lipschitz K
+            # -------------------------------------------------
+            est_dim_p_avg = est_dim_p_min = float('nan')
+            if self.enable_lipschitz and not np.isnan(K_est):
+                try:
+                    est_dim_p_avg = float(np.log(max(N, 2)) / np.log(1 + 2 * R * K_est / (avg_dis_p + eps))) if avg_dis_p > eps else float('nan')
+                except ZeroDivisionError:
+                    est_dim_p_avg = float('nan')
+                try:
+                    est_dim_p_min = float(np.log(max(N, 2)) / np.log(1 + 2 * R * K_est / (min_dis_p + eps))) if min_dis_p > eps else float('nan')
+                except ZeroDivisionError:
+                    est_dim_p_min = float('nan')
+
+            # -------------------------------------------------
+            # 6. Record and return
+            # -------------------------------------------------
+            self.monitoring_data['avg_dis_z'].append(avg_dis)
+            self.monitoring_data['min_dis_z'].append(min_dis)
+            self.monitoring_data['avg_dis_p'].append(avg_dis_p)
+            self.monitoring_data['min_dis_p'].append(min_dis_p)
+            self.monitoring_data['est_dim_avg'].append(est_dim_avg)
+            self.monitoring_data['est_dim_min'].append(est_dim_min)
+            self.monitoring_data['est_dim_p_avg'].append(est_dim_p_avg)
+            self.monitoring_data['est_dim_p_min'].append(est_dim_p_min)
+
+            print(f"📏 FULL DATASET Δ_z(avg): {avg_dis:.6f}, Δ_z(min): {min_dis:.6f}, R: {R:.6f}\n     → est_dim(avg): {est_dim_avg:.2f}, est_dim(min): {est_dim_min:.2f}")
+            print(f"📊 P-space distances: Δ_p(avg): {avg_dis_p:.6f}, Δ_p(min): {min_dis_p:.6f}\n     → est_dim(avg): {est_dim_p_avg:.2f}, est_dim(min): {est_dim_p_min:.2f}")
+
+            # Return dictionary (prefixed with _full to avoid confusion)
+            return {
+                'avg_dis_z_full': avg_dis,
+                'min_dis_z_full': min_dis,
+                'avg_dis_p_full': avg_dis_p,
+                'min_dis_p_full': min_dis_p,
+                'est_dim_avg_full': est_dim_avg,
+                'est_dim_min_full': est_dim_min,
+                'lipschitz_K_full': K_est if self.enable_lipschitz else None,
+                'est_dim_p_avg_full': est_dim_p_avg,
+                'est_dim_p_min_full': est_dim_p_min,
+            }
+        except Exception as e:
+            print(f"⚠️ Failed full-dataset dimension computation: {e}")
+            return {}
+
+    # Public alias
+    def compute_full_dim_metrics(self):
+        return self._compute_full_dim_metrics()
+
+    # -------------------------------------------------------------
+    # Lipschitz constant estimation helpers
+    # -------------------------------------------------------------
+    def _estimate_lipschitz(self, z_tensor: torch.Tensor) -> float:
+        """Estimate Lipschitz constant K_theta (w.r.t latent z).
+
+        Finds the maximum spectral norm of the Jacobian of the stacked q outputs
+        (over fixed probe actions) with respect to z across a subset of samples.
+        """
+        if not self.enable_lipschitz:
+            return float('nan')
+
+        L = getattr(self.cfg, 'dim_lipschitz_samples', 256)
+        N = z_tensor.shape[0]
+        if N == 0:
+            return float('nan')
+        idx = torch.randperm(N, device=z_tensor.device)[:min(L, N)]
+        z_subset = z_tensor[idx]
+
+        probe_actions = self._probe_actions.to(z_tensor.device)
+        num_bins = getattr(self.cfg, 'num_bins', 101)
+
+        # Define single-sample function
+        def q_stack(z_single: torch.Tensor):
+            z_rep = z_single.repeat(self.M_actions, 1)
+            a_rep = probe_actions
+            q_out = self.agent.model.Q(z_rep, a_rep, task=None, return_type='all', detach=False)
+            q_out = q_out.mean(0)  # (M, num_bins) – average over ensemble
+            q_out = q_out.mean(0)  # average over actions → (num_bins)
+            return q_out  # (num_bins)
+
+        # jacrev then vmap to compute singular max quickly
+        jac_fn = jacrev(q_stack)
+
+        def single_spectral(z_single: torch.Tensor):
+            J = jac_fn(z_single)
+            # J shape: (output_dim, latent_dim)
+            svals = torch.linalg.svdvals(J)
+            return svals.max()
+
+        # Vectorise
+        spec_vals = vmap(single_spectral)(z_subset)
+        K_est = float(spec_vals.max().item())
+        return K_est
+
 # Integration function for easy use in training loop
-def create_simple_encoding_monitor(cfg, encoder, env, save_dir=None, agent=None):
+def create_simple_encoding_monitor(cfg, encoder, env, save_dir=None, agent=None, buffer=None):
     """Factory function to create simple encoding monitor"""
     return SimpleEncodingSpaceMonitor(
         cfg=cfg,
@@ -578,5 +833,6 @@ def create_simple_encoding_monitor(cfg, encoder, env, save_dir=None, agent=None)
         env=env,
         device=cfg.get('device', 'cuda'),
         save_dir=save_dir or f"simple_encoding_logs_{cfg.exp_name}",
-        agent=agent
+        agent=agent,
+        buffer=buffer
     )

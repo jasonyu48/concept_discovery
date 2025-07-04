@@ -86,7 +86,8 @@ class OnlineTrainer(Trainer):
 					env=self.env,
 					device=str(self.agent.device),
 					save_dir=self.cfg.work_dir / "encoding_monitor",
-					agent=self.agent
+					agent=self.agent,
+					buffer=self.buffer
 				)
 			except Exception as e:
 				print(f"⚠️ Failed to initialize encoding space monitor: {e}")
@@ -146,6 +147,13 @@ class OnlineTrainer(Trainer):
 
 		# Generate final simple encoding space monitoring report
 		if hasattr(self.agent, 'encoding_monitor') and self.agent.encoding_monitor is not None:
+			# Compute final dimension metrics using complete buffer
+			try:
+				print("\n🧮 Computing full-dataset latent dimension metrics ...")
+				self.agent.encoding_monitor.compute_full_dim_metrics()
+			except Exception as e:
+				print(f"⚠️ Failed to compute full-dataset dimension metrics: {e}")
+
 			print("\n" + "="*60)
 			print(" FINAL SIMPLE ENCODING SPACE ANALYSIS")
 			print("="*60)

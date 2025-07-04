@@ -13,7 +13,7 @@ eval_episodes: 10
 eval_freq: 5000
 
 # training
-steps: 10_000
+steps: 20_000
 batch_size: 256
 reward_coef: 0.1
 value_coef: 0.1
@@ -38,7 +38,7 @@ tau: 0.01
 discount_denom: 5
 discount_min: 0.95
 discount_max: 0.995
-buffer_size: 2_000
+buffer_size: 1_000
 q_sample_ratio: 1.0  # Ratio of buffer data visible to Q-function and collapse prevention training (0.0-1.0)
 exp_name: TEST_buffer
 data_dir: ???
@@ -93,7 +93,7 @@ num_channels: 32
 mlp_dim: 512
 latent_dim: 512
 task_dim: 96
-num_q: 5
+num_q: 1
 dropout: 0.01
 
 # logging
