@@ -362,26 +362,6 @@ class TDMPC2(torch.nn.Module):
 		qs_pi = self.scale(qs_pi)
 		rho = torch.pow(self.cfg.rho, torch.arange(len(qs_pi), device=self.device))
 		pi_loss = (-(self.cfg.entropy_coef * info_pi["scaled_entropy"] + qs_pi).mean(dim=(1,2)) * rho).mean()
-		
-		# check if the condition (Exist) holds
-		# if (self.cfg.exist_check_freq and (step+1) % self.cfg.exist_check_freq == 0):
-        #     # pick one 'advantaged' state and ~32 'others' from the batch
-		# 	batch_states = obs[0]                # shape (B, …)
-		# 	if batch_states.size(0) > 1:         # need at least 2 states
-		# 		print("Checking if the condition (Exist) holds...")
-		# 		s_a = batch_states[0]
-		# 		other_states = batch_states[1 : 33]   # up to 32 "others"
-
-		# 		ok, sigma = exist_condition_holds(
-		# 			encoder=self.model._encoder[self.cfg.obs],   # <-- pass the specific encoder for the observation type
-		# 			s_a=s_a,
-		# 			other_obs=other_states,
-		# 			tol=self.cfg.exist_tol,
-		# 			device=self.device
-		# 		)
-		# 		print(f"Exist condition holds: {ok}, sigma_min: {sigma:.3e}")
-		# 		# encoding_space_s = encoding_space_size(self.model._encoder[self.cfg.obs], batch_states)
-		# 		# print(f"Encoding space size: {encoding_space_s:.3e}")
 
 		if self.cfg.ortho_reg:
 			# Concatenate all observations from the sequence to avoid bias toward initial observations
