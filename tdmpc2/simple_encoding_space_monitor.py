@@ -588,7 +588,7 @@ class SimpleEncodingSpaceMonitor:
         gif_dir.mkdir(exist_ok=True)
         # Get latent encodings and decoder reconstructions
         enc = self.baseline_encodings.to(self.device)
-        dec = getattr(self.agent, 'decoder', None)
+        dec = getattr(getattr(self.agent, 'model', None), '_decoder', None)
         if dec is None:
             raise RuntimeError('Decoder not found on agent')
         with torch.no_grad():

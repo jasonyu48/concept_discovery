@@ -95,6 +95,11 @@ class WorldModel(nn.Module):
 		else:
 			self._pi = layers.mlp(cfg.latent_dim + cfg.task_dim, 2*[cfg.mlp_dim], 2*cfg.action_dim)
 		self._Qs = layers.Ensemble([layers.mlp(cfg.latent_dim + cfg.action_dim + cfg.task_dim, 2*[cfg.mlp_dim], max(cfg.num_bins, 1), dropout=cfg.dropout) for _ in range(cfg.num_q)])
+		# Initialize optional decoder for pixel reconstruction
+		if getattr(cfg, 'enable_decoder', False):
+			self._decoder = layers.dec(cfg)
+		else:
+			self._decoder = None
 		# Collapse prevention modules
 		if getattr(cfg, 'collapse_prevention', False):
 			self._collapse_pred = layers.mlp(cfg.latent_dim, 2*[cfg.mlp_dim], cfg.collapse_prevention_dim)
