@@ -13,6 +13,7 @@ import time
 import imageio
 import json
 import pandas as pd
+import matplotlib.cm as cm
 
 # RankMe metric
 try:
@@ -360,6 +361,13 @@ class SimpleEncodingSpaceMonitor:
         if step % (self.monitor_freq * 5) == 0:
             self._save_model_checkpoint(step)
         
+        # Save decoder input/output gif comparison
+        if getattr(self.cfg, 'enable_decoder', False) and hasattr(self.agent, 'decoder'):
+            try:
+                self._save_decoder_gifs(step)
+                print(f"   ✅ Saved decoder comparison gifs at step {step}")
+            except Exception as e:
+                print(f"   ⚠️ Failed to save decoder gifs: {e}")
         return metrics
     
     def save_monitoring_data(self):
@@ -568,6 +576,49 @@ class SimpleEncodingSpaceMonitor:
   • Stable trends generally indicate healthy learning
 """
         return report
+   
+    def _save_decoder_gifs(self, step: int):
+        
+        """Save GIF comparison of encoder input and decoder output at given step."""
+        # Ensure decoder available
+        # Save gifs alongside decoder loss file directory
+        base_dir = Path(self.cfg.work_dir) if hasattr(self.cfg, 'work_dir') else self.save_dir
+        gif_dir = base_dir / "decoder_gifs"
+        gif_dir.mkdir(exist_ok=True)
+        # Get latent encodings and decoder reconstructions
+        enc = self.baseline_encodings.to(self.device)
+        dec = getattr(self.agent, 'decoder', None)
+        if dec is None:
+            raise RuntimeError('Decoder not found on agent')
+        with torch.no_grad():
+            recon = dec(enc).detach().cpu()  # B x C x H x W
+        obs = self.baseline_observations.detach().cpu()  # B x C x H x W
+        # Use first sample for visualization
+        obs0 = obs[0]
+        recon0 = recon[0]
+        print("[DEBUG] obs0.shape =", obs0.shape, "recon0.shape =", recon0.shape)
+        # Prepare color frames from stacked channels
+        C, H, W = obs0.shape
+        num_frames = C // 3
+        frames = []
+        for f in range(num_frames):
+            # original and reconstructed frame (3 channels each)
+            orig = obs0[f*3:(f+1)*3].numpy().astype(np.float32)  # (3, H, W)
+            rec = recon0[f*3:(f+1)*3].numpy().astype(np.float32)
+            # channel-first to HxWx3
+            orig_img = np.transpose(orig, (1, 2, 0))
+            rec_img = np.transpose(rec, (1, 2, 0))
+            # normalize original to [0,1]
+            omin, omax = orig_img.min(), orig_img.max()
+            orig_img = (orig_img - omin) / (omax - omin + 1e-8)
+            # map reconstructed from tanh [-1,1] to [0,1]
+            rec_img = (rec_img + 1.0) / 2.0
+            rec_img = np.clip(rec_img, 0.0, 1.0)
+            # concatenate side by side
+            comb = np.concatenate([orig_img, rec_img], axis=1)
+            frames.append((comb * 255).astype(np.uint8))
+        gif_path = gif_dir / f"decoder_cmp_step{step}.gif"
+        imageio.mimsave(str(gif_path), frames, fps=2)
 
 # Integration function for easy use in training loop
 def create_simple_encoding_monitor(cfg, encoder, env, save_dir=None, agent=None):
