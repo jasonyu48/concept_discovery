@@ -69,7 +69,7 @@ class SimpleEncodingSpaceMonitor:
         if self.enable_dim_monitor:
             self.monitoring_data['avg_dis_z'] = []
             self.monitoring_data['min_dis_z'] = []
-            self.monitoring_data['avg_dis_p'] = []  # distances in Q-stack space
+            self.monitoring_data['avg_dis_p'] = []  # distances in Q-average space
             self.monitoring_data['min_dis_p'] = []
             self.monitoring_data['est_dim_avg'] = []
             self.monitoring_data['est_dim_min'] = []
@@ -715,7 +715,7 @@ class SimpleEncodingSpaceMonitor:
             # 5. Radius R and dimensionality estimate (z)
             # -------------------------------------------------
             R = float(z.norm(dim=1).max().item())
-            eps = 1e-8
+            eps = 1e-10
             try:
                 est_dim_avg = float(np.log(max(N, 2)) / np.log(1 + 2 * R / (avg_dis + eps))) if avg_dis > eps else float('nan')
             except ZeroDivisionError:
