@@ -176,6 +176,54 @@ def enc(cfg, out={}):
 	return nn.ModuleDict(out)
 
 
+###adding the deocoder-Siyi Chen 2025-7-3#####
+def dec(cfg):
+    """Return a decoder that mirrors the encoder."""
+    if cfg.obs == "rgb":
+        return CNNDecoder(cfg)
+    elif cfg.obs == "state":
+        return MLPDecoder(cfg)          
+    else:
+        raise NotImplementedError(f"No decoder for obs={cfg.obs}")
+
+# ===== 1.2 CNNDecoder（64×64 RGB → z inverse process） =============================
+class CNNDecoder(nn.Module):
+    def __init__(self, cfg):
+        super().__init__()
+        self.h_dim = cfg.num_channels #32
+        # This allows it to reconstruct the full frame stack (e.g., 9 channels).
+        output_channels = cfg.obs_shape['rgb'][0]
+        self.net = nn.Sequential(
+                    nn.ReLU(inplace=True),                                # (32,4,4)
+                    nn.ConvTranspose2d(self.h_dim, self.h_dim,
+                                       3, stride=1, padding=1),  nn.ReLU(),        # 4×4
+                    nn.ConvTranspose2d(self.h_dim, self.h_dim,
+                                       3, stride=2, padding=1, output_padding=1), nn.ReLU(),  # 8×8
+                    nn.ConvTranspose2d(self.h_dim, self.h_dim,
+                                       5, stride=2, padding=2, output_padding=1), nn.ReLU(),  # 16×16
+                    nn.ConvTranspose2d(self.h_dim, self.h_dim,
+                                       5, stride=2, padding=2, output_padding=1), nn.ReLU(),  # 32×32
+                    nn.ConvTranspose2d(self.h_dim, output_channels,
+                                       4, stride=2, padding=1),                         # 64×64
+                    nn.Tanh()   # [-1,1]
+                )
+    
+    def forward(self, z):
+        # z shape: (B, 32*4*4) = (B, 512)
+        B, D = z.shape
+        assert D == self.h_dim * 4 * 4, f"Expect {self.h_dim*4*4}, got {D}"
+        x = z.view(B, self.h_dim, 4, 4)
+        return self.net(x)
+
+# =====MLPDecoder ============================================
+class MLPDecoder(nn.Module):
+    def __init__(self, cfg):
+        raise NotImplementedError("State‑only tasks has not enbled Decoder")
+	
+######end of decoder part########
+
+
+
 def api_model_conversion(target_state_dict, source_state_dict):
 	"""
 	Converts a checkpoint from our old API to the new torch.compile compatible API.
