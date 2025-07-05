@@ -1,5 +1,9 @@
 import torch
 import torch.nn.functional as F
+import numpy as np
+import matplotlib
+matplotlib.use('Agg') # Use non-interactive backend for servers
+import matplotlib.pyplot as plt
 
 from common import math
 from common.scale import RunningScale
@@ -7,7 +11,10 @@ from common.world_model import WorldModel
 from common.layers import api_model_conversion
 from tensordict import TensorDict
 
-from regularizations import orthogonality_regularization, full_rank_regularization
+
+####decoder related imports###
+from pathlib import Path    
+####end of decoder related imports###
 
 class TDMPC2(torch.nn.Module):
 	"""
@@ -21,7 +28,22 @@ class TDMPC2(torch.nn.Module):
 		self.cfg = cfg
 		self.device = torch.device('cuda:0')
 		self.model = WorldModel(cfg).to(self.device)
-		self.optim = torch.optim.Adam([
+		# --------------------------------------------------
+		#  Decoder：activated when cfg.enable_decoder = True 
+		# --------------------------------------------------
+		if getattr(self.cfg, "enable_decoder", False):
+			# Logging and plotting files
+			self.decoder_loss_file = Path(self.cfg.work_dir) / self.cfg.decoder_loss_file
+			self.decoder_loss_file.write_text("step,loss\n")
+			self.decoder_curve_file = self.decoder_loss_file.with_name('DecoderLossCurve.png')
+			self.decoder_steps, self.decoder_losses = [], []
+		else:
+			self.decoder_loss_file = None
+			self.decoder_curve_file = None
+			self.decoder_steps, self.decoder_losses = [], []
+
+		# Build parameter groups for the main optimizer (optionally includes decoder)
+		param_groups = [
 			{'params': self.model._encoder.parameters(), 'lr': self.cfg.lr*self.cfg.enc_lr_scale},
 			{'params': self.model._dynamics.parameters()},
 			{'params': self.model._reward.parameters()},
@@ -29,7 +51,10 @@ class TDMPC2(torch.nn.Module):
 			{'params': self.model._Qs.parameters()},
 			{'params': self.model._task_emb.parameters() if self.cfg.multitask else []},
 			{'params': self.model._collapse_pred.parameters() if getattr(self.cfg, 'collapse_prevention', False) else []}
-		], lr=self.cfg.lr, capturable=True)
+		]
+		if getattr(self.cfg, 'enable_decoder', False):
+			param_groups.append({'params': self.model._decoder.parameters()})
+		self.optim = torch.optim.Adam(param_groups, lr=self.cfg.lr, capturable=True)
 		self.pi_optim = torch.optim.Adam(self.model._pi.parameters(), lr=self.cfg.lr, eps=1e-5, capturable=True)
 		self.model.eval()
 		self.scale = RunningScale(cfg)
@@ -261,25 +286,74 @@ class TDMPC2(torch.nn.Module):
 		discount = self.discount[task].unsqueeze(-1) if self.cfg.multitask else self.discount
 		return reward + discount * (1-terminated) * self.model.Q(next_z, action, task, return_type='min', target=True)
 
+	def _plot_decoder_loss(self):
+		"""Generates and saves a plot of the decoder loss."""
+		try:
+			fig, ax = plt.subplots(figsize=(10, 5))
+			ax.plot(self.decoder_steps, self.decoder_losses)
+			ax.set_xlabel("Training Step")
+			ax.set_ylabel("MSE Loss")
+			ax.set_title("Decoder Loss Curve")
+			ax.grid(True)
+			plt.savefig(self.decoder_curve_file, bbox_inches='tight')
+			plt.close(fig)
+		except Exception as e:
+			print(f"Warning: Could not plot decoder loss curve. Error: {e}")
+
 	def _update(self, obs, action, reward, terminated, q_mask=None, task=None, step=None, pretrain_step=-1):
 		# Prepare for update
 		self.model.train()
-		
-		# Compute targets
+		# zero existing gradients once per iteration
+		self.optim.zero_grad(set_to_none=True)
+		self.pi_optim.zero_grad(set_to_none=True)
+
+		# ------------------------------------------------------------------
+		# Encode ALL observations *once* (shape: (T+1, B, latent_dim))
+		# ------------------------------------------------------------------
+		enc_obs = self.model.encode(obs, task)
+
+		# ------------------------------------------------------------------
+		# Decoder reconstruction loss (detached) – no optimiser step yet
+		# ------------------------------------------------------------------
+		dec_loss = torch.tensor(0.0, device=self.device)
+		if self.cfg.obs == 'rgb' and getattr(self.cfg, "enable_decoder", False):
+			# Target images: normalize entire observation tensor to [-1,1]
+			rgb_norm = (obs.to(self.device).float() / 255.0 - 0.5) * 2  # (T+1, B, C, H, W)
+			z_detached = enc_obs.detach()
+			pred_rgb = self.model._decoder(z_detached.reshape(-1, z_detached.shape[-1]))
+			pred_rgb = pred_rgb.reshape_as(rgb_norm)
+			dec_loss = F.mse_loss(pred_rgb, rgb_norm)
+
+			# Logging / plotting (no step yet)
+			self.decoder_steps.append(step)
+			self.decoder_losses.append(dec_loss.item())
+			if self.decoder_loss_file is not None:
+				with self.decoder_loss_file.open("a") as f:
+					f.write(f"{step},{dec_loss.item():.6f}\n")
+			if len(self.decoder_steps) > 1 and step > 0 and step % self.cfg.monitor_freq == 0:
+				self._plot_decoder_loss()
+			if hasattr(self, "logger"):
+				self.logger.log("decoder_loss", dec_loss.item(), step)
+
+		##### end of decoder training
+
+		# ------------------------------------------------------------------
+		# Compute TD targets using pre-computed encodings
+		# ------------------------------------------------------------------
 		if self.cfg.JEPA_sg:
-			# Encode next_z without gradients (original behavior)
+			next_z = enc_obs[1:].detach()
 			with torch.no_grad():
-				next_z = self.model.encode(obs[1:], task)
 				td_targets = self._td_target(next_z, reward, terminated, task)
 		else:
-			# Encode next_z with gradients enabled
-			next_z = self.model.encode(obs[1:], task)
+			next_z = enc_obs[1:]
 			with torch.no_grad():
 				td_targets = self._td_target(next_z, reward, terminated, task)
 
-		# Latent rollout
+		# ------------------------------------------------------------------
+		# Latent rollout starting from encoded obs[0] (undetached)
+		# ------------------------------------------------------------------
 		zs = torch.empty(self.cfg.horizon+1, self.cfg.batch_size, self.cfg.latent_dim, device=self.device)
-		z = self.model.encode(obs[0], task)
+		z = enc_obs[0]  # uses gradients
 		zs[0] = z
 		consistency_loss = 0
 		for t, (_action, _next_z) in enumerate(zip(action.unbind(0), next_z.unbind(0))):
@@ -336,7 +410,7 @@ class TDMPC2(torch.nn.Module):
 			# Flatten time and batch dimensions to use the entire sequence
 			T_seq, B = obs.shape[0], obs.shape[1]
 			obs_flat = obs.view(-1, *obs.shape[2:]).to(dtype=torch.float32)  # ((T)*B, ...)
-			zs_flat = zs.view(-1, zs.shape[-1])                  # ((T)*B, latent_dim)
+			zs_flat = enc_obs.view(-1, enc_obs.shape[-1])        # Use encoded latents instead of rollout
 			random_target = self.model._random_fn(obs_flat).detach()  # ((T)*B, D)
 			pred_target = self.model._collapse_pred(zs_flat)          # ((T)*B, D)
 			# Apply Q-sampling mask across batch dimension for every timestep
@@ -363,27 +437,6 @@ class TDMPC2(torch.nn.Module):
 		rho = torch.pow(self.cfg.rho, torch.arange(len(qs_pi), device=self.device))
 		pi_loss = (-(self.cfg.entropy_coef * info_pi["scaled_entropy"] + qs_pi).mean(dim=(1,2)) * rho).mean()
 
-		if self.cfg.ortho_reg:
-			# Concatenate all observations from the sequence to avoid bias toward initial observations
-			# obs shape: (horizon+1, batch_size, ...) -> (batch_size * (horizon+1), ...)
-			all_obs = obs.view(-1, *obs.shape[2:])  # Flatten first two dimensions
-			ortho_loss = orthogonality_regularization(
-				self.model._encoder[self.cfg.obs], all_obs, device=self.device, latent_dim=self.cfg.latent_dim
-			)
-			if self.cfg.monitor_freq and (step+1) % self.cfg.monitor_freq == 0:
-				print(f"Orthogonality loss: {ortho_loss.item():.6e}")
-
-		if self.cfg.full_rank_reg:
-			# Concatenate all observations from the sequence to avoid bias toward initial observations
-			# obs shape: (horizon+1, batch_size, ...) -> (batch_size * (horizon+1), ...)
-			all_obs = obs.view(-1, *obs.shape[2:])  # Flatten first two dimensions
-			fr_loss, abs_det = full_rank_regularization(
-				self.model._encoder[self.cfg.obs], all_obs, device=self.device, latent_dim=self.cfg.latent_dim,
-				num_samples=self.cfg.full_rank_reg_num_samples
-			)
-			if self.cfg.monitor_freq and (step+1) % self.cfg.monitor_freq == 0:
-				print(f"Full rank loss: {abs_det.item():.6e}")
-
 		# Combine all losses
 		total_loss = (
 			self.cfg.consistency_coef * consistency_loss +
@@ -391,13 +444,9 @@ class TDMPC2(torch.nn.Module):
 			self.cfg.termination_coef * termination_loss +
 			self.cfg.value_coef * value_loss +
 			self.cfg.pi_coef * pi_loss +  # Add policy loss to total
-			collapse_prevention_coef * collapse_loss
+			collapse_prevention_coef * collapse_loss +
+			dec_loss  # reconstruction component
 		)
-
-		if self.cfg.ortho_reg:
-			total_loss = total_loss + self.cfg.ortho_reg_coef * ortho_loss
-		if self.cfg.full_rank_reg:
-			total_loss = total_loss + self.cfg.full_rank_reg_coef * fr_loss
 
 		# Single backward pass for all losses
 		total_loss.backward()
@@ -457,6 +506,7 @@ class TDMPC2(torch.nn.Module):
 		"""
 		obs, action, reward, terminated, task, q_mask = buffer.sample()
 		
+		# Now, `obs` is passed directly to _update without modification.
 		kwargs = {}
 		if task is not None:
 			kwargs["task"] = task
