@@ -411,7 +411,7 @@ class SimpleEncodingSpaceMonitor:
         # Dimension monitoring (pairwise latent distance & estimated dim)
         # -------------------------------------------------------------
         if self.enable_dim_monitor and self.buffer is not None and (step % self.dim_monitor_steps == 0):
-            dim_metrics = self._compute_full_dim_metrics()
+            dim_metrics = self.compute_full_dim_metrics()
             if dim_metrics:
                 metrics.update(dim_metrics)
         
