@@ -116,7 +116,7 @@ class SimpleEncodingSpaceMonitor:
         # RankMe setup (needed for baseline observation sampling)
         # -------------------------------------------------------------
         self.rankme_samples = getattr(self.cfg, 'rankme_samples', 30000)
-        self.rankme_batch_size = 4096
+        self.rankme_batch_size = 1024
         default_rankme_path = f"/scratch/tshu2/jyu197/obs_data/{getattr(self.cfg, 'task', 'unknown')}/obs/observations.pt"
         self.rankme_obs_path = Path(getattr(self.cfg, 'rankme_obs_path', default_rankme_path))
         self._rankme_observations = None  # Lazy loaded
@@ -189,11 +189,22 @@ class SimpleEncodingSpaceMonitor:
         else:
             initial_rand_mag = None
         
+        # -------------------------------------------------------------
+        # Decoder loss tracking
+        # -------------------------------------------------------------
+        self.decoder_loss_file = Path(getattr(cfg, 'work_dir', '.')) / getattr(cfg, 'decoder_loss_file', 'DecoderLoss.txt')
+        self.decoder_curve_file = self.save_dir / 'DecoderLossCurve.png'
+        
     def _sample_baseline_observations(self):
         """Sample baseline observations from saved observation data using cfg.seed"""
         print("🌱 Sampling baseline observations from saved data...")
         
         try:
+            # Save RNG states to avoid affecting global randomness
+            torch_cpu_state = torch.get_rng_state()
+            torch_cuda_state = torch.cuda.get_rng_state_all() if torch.cuda.is_available() else None
+            np_state = np.random.get_state()
+
             # Load saved observations
             if not self.rankme_obs_path.exists():
                 raise FileNotFoundError(f"Saved observations not found: {self.rankme_obs_path}")
@@ -219,8 +230,11 @@ class SimpleEncodingSpaceMonitor:
             print(f"✅ Sampled {len(indices)} baseline observations")
             print(f"   Final shape: {self.baseline_observations.shape}")
 
-            torch.manual_seed(self.cfg.seed)
-            np.random.seed(self.cfg.seed)
+            # Restore original RNG states so training randomness is unchanged
+            torch.set_rng_state(torch_cpu_state)
+            if torch_cuda_state is not None:
+                torch.cuda.set_rng_state_all(torch_cuda_state)
+            np.random.set_state(np_state)
             
         except Exception as e:
             print(f"⚠️ Failed to sample from saved observations: {e}")
@@ -397,12 +411,9 @@ class SimpleEncodingSpaceMonitor:
         # Dimension monitoring (pairwise latent distance & estimated dim)
         # -------------------------------------------------------------
         if self.enable_dim_monitor and self.buffer is not None and (step % self.dim_monitor_steps == 0):
-            try:
-                dim_metrics = self._compute_full_dim_metrics()
-                if dim_metrics:
-                    metrics.update(dim_metrics)
-            except Exception as e:
-                print(f"⚠️ Failed to compute dimension metrics: {e}")
+            dim_metrics = self._compute_full_dim_metrics()
+            if dim_metrics:
+                metrics.update(dim_metrics)
         
         # Auto-save periodically and generate updated plots
         if step % (self.monitor_freq * 5) == 0:
@@ -417,14 +428,7 @@ class SimpleEncodingSpaceMonitor:
         # Save model periodically to same path (every 5 monitoring steps)
         if step % (self.monitor_freq * 5) == 0:
             self._save_model_checkpoint(step)
-        
-        # Save decoder input/output gif comparison
-        if getattr(self.cfg, 'enable_decoder', False) and hasattr(self.agent, 'decoder'):
-            try:
-                self._save_decoder_gifs(step)
-                print(f"   ✅ Saved decoder comparison gifs at step {step}")
-            except Exception as e:
-                print(f"   ⚠️ Failed to save decoder gifs: {e}")
+
         return metrics
     
     def save_monitoring_data(self):
@@ -548,6 +552,11 @@ class SimpleEncodingSpaceMonitor:
             plt.savefig(plot_path, dpi=300, bbox_inches='tight')
             print(f"📊 Saved monitoring curves to {plot_path}")
 
+        # -----------------------------------------------
+        # Additionally plot decoder loss curve (if file/list available)
+        # -----------------------------------------------
+        self._plot_decoder_loss()
+
         return plt.gcf()
 
     # -------------------------------------------------------------
@@ -634,208 +643,220 @@ class SimpleEncodingSpaceMonitor:
 """
         return report
    
-    def _save_decoder_gifs(self, step: int):
-        
-        """Save GIF comparison of encoder input and decoder output at given step."""
-        # Ensure decoder available
-        # Save gifs alongside decoder loss file directory
+
+    # -------------------------------------------------------------
+    # Public API: save multiple decoder GIFs after training
+    # -------------------------------------------------------------
+    def save_decoder_gifs(self, num_gifs = 5, step = None):
+        """Generate *num_gifs* comparison GIFs between original RGB stack and decoder output.
+
+        Args:
+            num_gifs: number of different observations to visualise (default 5).
+            step:     optional step label used in the filename.
+        """
+        if not getattr(self.cfg, 'enable_decoder', False):
+            print("⚠️ Decoder disabled – skipping GIF generation.")
+            return None
+
+        dec = getattr(getattr(self.agent, 'model', None), '_decoder', None)
+        if dec is None:
+            print("⚠️ Decoder module not found – skipping GIF generation.")
+            return None
+
         base_dir = Path(self.cfg.work_dir) if hasattr(self.cfg, 'work_dir') else self.save_dir
         gif_dir = base_dir / "decoder_gifs"
         gif_dir.mkdir(exist_ok=True)
-        # Get latent encodings and decoder reconstructions
-        enc = self.baseline_encodings.to(self.device)
-        dec = getattr(getattr(self.agent, 'model', None), '_decoder', None)
-        if dec is None:
-            raise RuntimeError('Decoder not found on agent')
-        with torch.no_grad():
-            recon = dec(enc).detach().cpu()  # B x C x H x W
-        obs = self.baseline_observations.detach().cpu()  # B x C x H x W
-        # Use first sample for visualization
-        obs0 = obs[0]
-        recon0 = recon[0]
-        print("[DEBUG] obs0.shape =", obs0.shape, "recon0.shape =", recon0.shape)
-        # Prepare color frames from stacked channels
-        C, H, W = obs0.shape
-        num_frames = C // 3
-        frames = []
-        for f in range(num_frames):
-            # original and reconstructed frame (3 channels each)
-            orig = obs0[f*3:(f+1)*3].numpy().astype(np.float32)  # (3, H, W)
-            rec = recon0[f*3:(f+1)*3].numpy().astype(np.float32)
-            # channel-first to HxWx3
-            orig_img = np.transpose(orig, (1, 2, 0))
-            rec_img = np.transpose(rec, (1, 2, 0))
-            # normalize original to [0,1]
-            omin, omax = orig_img.min(), orig_img.max()
-            orig_img = (orig_img - omin) / (omax - omin + 1e-8)
-            # map reconstructed from tanh [-1,1] to [0,1]
-            rec_img = (rec_img + 1.0) / 2.0
-            rec_img = np.clip(rec_img, 0.0, 1.0)
-            # concatenate side by side
-            comb = np.concatenate([orig_img, rec_img], axis=1)
-            comb_uint8 = (comb * 255).astype(np.uint8)
-            scale = getattr(self.cfg, 'gif_scale', 2)
-            if scale and scale > 1:
-                pil_img = Image.fromarray(comb_uint8)
-                pil_img = pil_img.resize((pil_img.width * scale, pil_img.height * scale), resample=Image.NEAREST)
-                comb_uint8 = np.array(pil_img)
-            frames.append(comb_uint8)
-        gif_path = gif_dir / f"decoder_cmp_step{step}.gif"
-        imageio.mimsave(str(gif_path), frames, fps=2)
 
-    def _compute_full_dim_metrics(self) -> Dict[str, float]:
+        # Ensure we have encodings up-to-date
+        self._update_baseline_encodings()
+
+        enc_all = self.baseline_encodings.to(self.device)
+        obs_all = self.baseline_observations.detach().cpu()
+
+        n = min(num_gifs, obs_all.shape[0])
+
+        # Decoder to eval, restore afterwards
+        prev_mode = dec.training
+        dec.eval()
+        with torch.no_grad():
+            recon_all = dec(enc_all).detach().cpu()
+        dec.train(prev_mode)
+
+        for idx in range(n):
+            obs0 = obs_all[idx]
+            recon0 = recon_all[idx]
+            C, H, W = obs0.shape
+            num_frames = C // 3
+            frames = []
+            for f in range(num_frames):
+                orig = obs0[f*3:(f+1)*3].numpy().astype(np.float32)
+                rec = recon0[f*3:(f+1)*3].numpy().astype(np.float32)
+                orig_img = np.transpose(orig, (1, 2, 0))
+                rec_img = np.transpose(rec, (1, 2, 0))
+                omin, omax = orig_img.min(), orig_img.max()
+                orig_img = (orig_img - omin) / (omax - omin + 1e-8)
+                rec_img = (rec_img + 1.0) / 2.0
+                rec_img = np.clip(rec_img, 0.0, 1.0)
+                comb = np.concatenate([orig_img, rec_img], axis=1)
+                comb_uint8 = (comb * 255).astype(np.uint8)
+                scale = getattr(self.cfg, 'gif_scale', 4)
+                if scale and scale > 1:
+                    pil_img = Image.fromarray(comb_uint8)
+                    pil_img = pil_img.resize((pil_img.width * scale, pil_img.height * scale), resample=Image.NEAREST)
+                    comb_uint8 = np.array(pil_img)
+                frames.append(comb_uint8)
+
+            suffix = f"{step}" if step is not None else "final"
+            gif_path = gif_dir / f"decoder_cmp_{idx}_{suffix}.gif"
+            try:
+                imageio.mimsave(str(gif_path), frames, fps=2)
+                print(f"   🎞️  Saved decoder GIF → {gif_path}")
+            except Exception as e:
+                print(f"⚠️ Failed to save GIF {gif_path}: {e}")
+
+        return gif_dir
+
+    def compute_full_dim_metrics(self) -> Dict[str, float]:
         """Compute dimension metrics using *all* observations currently stored in the replay buffer."""
         if self.buffer is None or self.buffer.num_eps == 0:
             print("⚠️ No data in buffer – skipping full-dataset dimension analysis.")
             return {}
 
-        try:
-            # Attempt to access internal storage directly (TorchRL LazyTensorStorage)
-            storage = self.buffer._buffer._storage  # type: ignore
-            total_steps = self.buffer._steps_in_buffer  # type: ignore
-            td_all = storage[:total_steps]  # TensorDict slice containing all stored steps
-            obs_tensor = td_all.get('obs', None)
-            if obs_tensor is None:
-                print("⚠️ Buffer storage does not contain 'obs' field – cannot compute dimension metrics.")
-                return {}
 
-            # Flatten to (N, C, H, W)
-            if obs_tensor.ndim > 4:
-                obs_tensor = obs_tensor.view(-1, *obs_tensor.shape[-3:])
-
-            # -------------------------------------------------
-            # 1.5  Encode observations in manageable batches
-            # -------------------------------------------------
-            encode_batch = getattr(self.cfg, 'dim_encode_batch_size', 4096)
-            enc_list = []
-            with torch.no_grad():
-                for start in range(0, obs_tensor.shape[0], encode_batch):
-                    batch_obs = obs_tensor[start:start+encode_batch].to(self.device)
-                    enc = self.agent.model.encode(batch_obs, task=None)
-                    enc_list.append(enc.cpu())  # move to CPU to free GPU mem quickly
-                    del batch_obs, enc
-                    torch.cuda.empty_cache()
-
-            z = torch.cat(enc_list, dim=0).to(self.device)
-            del enc_list, obs_tensor
-            torch.cuda.empty_cache()
-
-            N = z.shape[0]
-            if N < 2:
-                print("⚠️ Not enough observations for full-dataset analysis.")
-                return {}
-
-            # -------------------------------------------------
-            # 3. Build stacked q outputs P(s) for probe actions
-            # -------------------------------------------------
-            probe_actions = self._probe_actions.to(self.device)  # (M, A)
-            num_bins = getattr(self.cfg, 'num_bins', 101)
-
-            q_list = []  # will collect on GPU then CPU
-
-            batch_q = encode_batch  # compute q in chunks
-            with torch.no_grad():
-                for start in range(0, N, batch_q):
-                    z_chunk = z[start:start+batch_q]  # (B, latent_dim)
-                    Bc = z_chunk.shape[0]
-                    # Expand for M actions
-                    z_rep = z_chunk.unsqueeze(1).repeat(1, self.M_actions, 1)
-                    a_rep = probe_actions.unsqueeze(0).repeat(Bc, 1, 1)
-                    z_flat = z_rep.reshape(-1, z.shape[1])
-                    a_flat = a_rep.reshape(-1, a_rep.shape[-1])
-
-                    q_out = self.agent.model.Q(z_flat, a_flat, task=None, return_type='all', detach=True)
-                    q_out = q_out.mean(0)  # (B*M, num_bins) – average over ensemble
-                    q_out = q_out.view(Bc, self.M_actions, num_bins).mean(1)  # (B, num_bins) average over actions
-                    q_list.append(q_out)
-
-            P = torch.cat(q_list, dim=0)  # (N, M*num_bins)
-
-            # -------------------------------------------------
-            # 4. Compute pairwise distances for z and P
-            # -------------------------------------------------
-            pdists = torch.cdist(z, z)  # (N, N)
-            triu = torch.triu_indices(N, N, offset=1)
-            d_vals = pdists[triu[0], triu[1]]
-            avg_dis = float(d_vals.mean().item())
-            min_dis = float(d_vals.min().item())
-            # P distances
-            pdists_p = torch.cdist(P, P)  # (N,N)
-            d_vals_p = pdists_p[triu[0], triu[1]]
-            avg_dis_p = float(d_vals_p.mean().item())
-            min_dis_p = float(d_vals_p.min().item())
-
-            # Free memory
-            del pdists, pdists_p, d_vals_p, d_vals
-            torch.cuda.empty_cache()
-
-            # -------------------------------------------------
-            # 5. Radius R and dimensionality estimate (z)
-            # -------------------------------------------------
-            R = float(z.norm(dim=1).max().item())
-            eps = 1e-10
-            try:
-                est_dim_avg = float(np.log(max(N, 2)) / np.log(1 + 2 * R / (avg_dis + eps))) if avg_dis > eps else float('nan')
-            except ZeroDivisionError:
-                est_dim_avg = float('nan')
-            est_dim_min = float(np.log(max(N, 2)) / np.log(1 + 2 * R / (min_dis + eps))) if min_dis > eps else float('nan')
-
-            # -------------------------------------------------
-            # 5b. Lipschitz constant estimation (subset of z)
-            # -------------------------------------------------
-            if self.enable_lipschitz:
-                K_est = self._estimate_lipschitz(z)
-                self.monitoring_data['lipschitz_K'].append(K_est)
-                print(f"🧮 Estimated Lipschitz K_theta (full): {K_est:.4f}")
-
-            # -------------------------------------------------
-            # 5c. Dimension estimates based on P-space distances & Lipschitz K
-            # -------------------------------------------------
-            est_dim_p_avg = est_dim_p_min = float('nan')
-            if self.enable_lipschitz and not np.isnan(K_est):
-                try:
-                    est_dim_p_avg = float(np.log(max(N, 2)) / np.log(1 + 2 * R * K_est / (avg_dis_p + eps))) if avg_dis_p > eps else float('nan')
-                except ZeroDivisionError:
-                    est_dim_p_avg = float('nan')
-                try:
-                    est_dim_p_min = float(np.log(max(N, 2)) / np.log(1 + 2 * R * K_est / (min_dis_p + eps))) if min_dis_p > eps else float('nan')
-                except ZeroDivisionError:
-                    est_dim_p_min = float('nan')
-
-            # -------------------------------------------------
-            # 6. Record and return
-            # -------------------------------------------------
-            self.monitoring_data['avg_dis_z'].append(avg_dis)
-            self.monitoring_data['min_dis_z'].append(min_dis)
-            self.monitoring_data['avg_dis_p'].append(avg_dis_p)
-            self.monitoring_data['min_dis_p'].append(min_dis_p)
-            self.monitoring_data['est_dim_avg'].append(est_dim_avg)
-            self.monitoring_data['est_dim_min'].append(est_dim_min)
-            self.monitoring_data['est_dim_p_avg'].append(est_dim_p_avg)
-            self.monitoring_data['est_dim_p_min'].append(est_dim_p_min)
-
-            print(f"📏 FULL DATASET Δ_z(avg): {avg_dis:.6f}, Δ_z(min): {min_dis:.6f}, R: {R:.6f}\n     → est_dim(avg): {est_dim_avg:.2f}, est_dim(min): {est_dim_min:.2f}")
-            print(f"📊 P-space distances: Δ_p(avg): {avg_dis_p:.6f}, Δ_p(min): {min_dis_p:.6f}\n     → est_dim(avg): {est_dim_p_avg:.2f}, est_dim(min): {est_dim_p_min:.2f}")
-
-            # Return dictionary (prefixed with _full to avoid confusion)
-            return {
-                'avg_dis_z_full': avg_dis,
-                'min_dis_z_full': min_dis,
-                'avg_dis_p_full': avg_dis_p,
-                'min_dis_p_full': min_dis_p,
-                'est_dim_avg_full': est_dim_avg,
-                'est_dim_min_full': est_dim_min,
-                'lipschitz_K_full': K_est if self.enable_lipschitz else None,
-                'est_dim_p_avg_full': est_dim_p_avg,
-                'est_dim_p_min_full': est_dim_p_min,
-            }
-        except Exception as e:
-            print(f"⚠️ Failed full-dataset dimension computation: {e}")
+        # Attempt to access internal storage directly (TorchRL LazyTensorStorage)
+        storage = self.buffer._buffer._storage  # type: ignore
+        total_steps = self.buffer._steps_in_buffer  # type: ignore
+        td_all = storage[:total_steps]  # TensorDict slice containing all stored steps
+        obs_tensor = td_all.get('obs', None)
+        if obs_tensor is None:
+            print("⚠️ Buffer storage does not contain 'obs' field – cannot compute dimension metrics.")
             return {}
 
-    # Public alias
-    def compute_full_dim_metrics(self):
-        return self._compute_full_dim_metrics()
+        # Flatten to (N, C, H, W)
+        if obs_tensor.ndim > 4:
+            obs_tensor = obs_tensor.view(-1, *obs_tensor.shape[-3:])
+
+        # -------------------------------------------------
+        # 1.5  Encode observations in manageable batches
+        # -------------------------------------------------
+        encode_batch = getattr(self.cfg, 'dim_encode_batch_size', 1024)
+        enc_list = []
+        with torch.no_grad():
+            for start in range(0, obs_tensor.shape[0], encode_batch):
+                batch_obs = obs_tensor[start:start+encode_batch].to(self.device)
+                enc = self.agent.model.encode(batch_obs, task=None)
+                enc_list.append(enc.cpu())  # move to CPU to free GPU mem quickly
+
+
+        z = torch.cat(enc_list, dim=0).to(self.device)
+
+        N = z.shape[0]
+        if N < 2:
+            print("⚠️ Not enough observations for full-dataset analysis.")
+            return {}
+
+        # -------------------------------------------------
+        # 3. Build stacked q outputs P(s) for probe actions
+        # -------------------------------------------------
+        probe_actions = self._probe_actions.to(self.device)  # (M, A)
+        num_bins = getattr(self.cfg, 'num_bins', 101)
+
+        q_list = []  # will collect on GPU then CPU
+
+        batch_q = encode_batch  # compute q in chunks
+        with torch.no_grad():
+            for start in range(0, N, batch_q):
+                z_chunk = z[start:start+batch_q]  # (B, latent_dim)
+                Bc = z_chunk.shape[0]
+                # Expand for M actions
+                z_rep = z_chunk.unsqueeze(1).repeat(1, self.M_actions, 1)
+                a_rep = probe_actions.unsqueeze(0).repeat(Bc, 1, 1)
+                z_flat = z_rep.reshape(-1, z.shape[1])
+                a_flat = a_rep.reshape(-1, a_rep.shape[-1])
+
+                q_out = self.agent.model.Q(z_flat, a_flat, task=None, return_type='all', detach=True)
+                q_out = q_out.mean(0)  # (B*M, num_bins) – average over ensemble
+                q_out = q_out.view(Bc, self.M_actions, num_bins).mean(1)  # (B, num_bins) average over actions
+                q_list.append(q_out)
+
+        P = torch.cat(q_list, dim=0)  # (N, M*num_bins)
+
+        # -------------------------------------------------
+        # 4. Compute pairwise distances for z and P
+        # -------------------------------------------------
+        pdists = torch.cdist(z, z)  # (N, N)
+        triu = torch.triu_indices(N, N, offset=1)
+        d_vals = pdists[triu[0], triu[1]]
+        avg_dis = float(d_vals.mean().item())
+        min_dis = float(d_vals.min().item())
+        # P distances
+        pdists_p = torch.cdist(P, P)  # (N,N)
+        d_vals_p = pdists_p[triu[0], triu[1]]
+        avg_dis_p = float(d_vals_p.mean().item())
+        min_dis_p = float(d_vals_p.min().item())
+
+
+
+        # -------------------------------------------------
+        # 5. Radius R and dimensionality estimate (z)
+        # -------------------------------------------------
+        R = float(z.norm(dim=1).max().item())
+        eps = 1e-10
+        try:
+            est_dim_avg = float(np.log(max(N, 2)) / np.log(1 + 2 * R / (avg_dis + eps))) if avg_dis > eps else float('nan')
+        except ZeroDivisionError:
+            est_dim_avg = float('nan')
+        est_dim_min = float(np.log(max(N, 2)) / np.log(1 + 2 * R / (min_dis + eps))) if min_dis > eps else float('nan')
+
+        # -------------------------------------------------
+        # 5b. Lipschitz constant estimation (subset of z)
+        # -------------------------------------------------
+        if self.enable_lipschitz:
+            K_est = self._estimate_lipschitz(z)
+            self.monitoring_data['lipschitz_K'].append(K_est)
+            print(f"🧮 Estimated Lipschitz Constant: {K_est:.4f}")
+
+        # -------------------------------------------------
+        # 5c. Dimension estimates based on P-space distances & Lipschitz K
+        # -------------------------------------------------
+        est_dim_p_avg = est_dim_p_min = float('nan')
+        if self.enable_lipschitz and not np.isnan(K_est):
+            try:
+                est_dim_p_avg = float(np.log(max(N, 2)) / np.log(1 + 2 * R * K_est / (avg_dis_p + eps))) if avg_dis_p > eps else float('nan')
+            except ZeroDivisionError:
+                est_dim_p_avg = float('nan')
+            try:
+                est_dim_p_min = float(np.log(max(N, 2)) / np.log(1 + 2 * R * K_est / (min_dis_p + eps))) if min_dis_p > eps else float('nan')
+            except ZeroDivisionError:
+                est_dim_p_min = float('nan')
+
+        # -------------------------------------------------
+        # 6. Record and return
+        # -------------------------------------------------
+        self.monitoring_data['avg_dis_z'].append(avg_dis)
+        self.monitoring_data['min_dis_z'].append(min_dis)
+        self.monitoring_data['avg_dis_p'].append(avg_dis_p)
+        self.monitoring_data['min_dis_p'].append(min_dis_p)
+        self.monitoring_data['est_dim_avg'].append(est_dim_avg)
+        self.monitoring_data['est_dim_min'].append(est_dim_min)
+        self.monitoring_data['est_dim_p_avg'].append(est_dim_p_avg)
+        self.monitoring_data['est_dim_p_min'].append(est_dim_p_min)
+
+        print(f"📏 FULL DATASET Δ_z(avg): {avg_dis:.2e}, Δ_z(min): {min_dis:.2e}, R: {R:.2e}\n     → est_dim(avg): {est_dim_avg:.2f}, est_dim(min): {est_dim_min:.2f}")
+        print(f"📊 P-space distances: Δ_p(avg): {avg_dis_p:.2e}, Δ_p(min): {min_dis_p:.2e}\n     → est_dim(avg): {est_dim_p_avg:.2f}, est_dim(min): {est_dim_p_min:.2f}")
+
+        # Return dictionary (prefixed with _full to avoid confusion)
+        return {
+            'avg_dis_z_full': avg_dis,
+            'min_dis_z_full': min_dis,
+            'avg_dis_p_full': avg_dis_p,
+            'min_dis_p_full': min_dis_p,
+            'est_dim_avg_full': est_dim_avg,
+            'est_dim_min_full': est_dim_min,
+            'lipschitz_K_full': K_est if self.enable_lipschitz else None,
+            'est_dim_p_avg_full': est_dim_p_avg,
+            'est_dim_p_min_full': est_dim_p_min,
+        }
 
     # -------------------------------------------------------------
     # Lipschitz constant estimation helpers
@@ -846,10 +867,12 @@ class SimpleEncodingSpaceMonitor:
         Finds the maximum spectral norm of the Jacobian of the stacked q outputs
         (over fixed probe actions) with respect to z across a subset of samples.
         """
+        assert self.cfg.num_q == 1, "Lipschitz constant estimation only supported for single-Q model"
+        assert self.cfg.num_bins >= 2, "num_bins must be at least 2"
         if not self.enable_lipschitz:
             return float('nan')
 
-        L = getattr(self.cfg, 'dim_lipschitz_samples', 256)
+        L = getattr(self.cfg, 'dim_lipschitz_samples', 64)
         N = z_tensor.shape[0]
         if N == 0:
             return float('nan')
@@ -857,7 +880,6 @@ class SimpleEncodingSpaceMonitor:
         z_subset = z_tensor[idx]
 
         probe_actions = self._probe_actions.to(z_tensor.device)
-        num_bins = getattr(self.cfg, 'num_bins', 101)
 
         # Define single-sample function
         def q_stack(z_single: torch.Tensor):
@@ -877,10 +899,50 @@ class SimpleEncodingSpaceMonitor:
             svals = torch.linalg.svdvals(J)
             return svals.max()
 
-        # Vectorise
-        spec_vals = vmap(single_spectral)(z_subset)
-        K_est = float(spec_vals.max().item())
+        # Compute spectral norms in manageable chunks to lower memory footprint
+        batch_size = 16  # process this many latent samples at a time
+        max_spec_val = float('-inf')
+
+        for start in range(0, z_subset.shape[0], batch_size):
+            z_batch = z_subset[start:start + batch_size]
+            # Vectorised evaluation within the current batch
+            spec_vals = vmap(single_spectral)(z_batch)
+            batch_max = spec_vals.max().item()
+            if batch_max > max_spec_val:
+                max_spec_val = batch_max
+
+        K_est = float(max_spec_val)
         return K_est
+
+    # -------------------------------------------------------------
+    # Decoder loss plotting moved from agent → monitor
+    # -------------------------------------------------------------
+    def _plot_decoder_loss(self):
+        """Generate and save the decoder loss curve using data shared by the agent."""
+        try:
+            # Load from file written by the agent
+            if not self.decoder_loss_file.exists():
+                return  # No data yet
+            df = pd.read_csv(self.decoder_loss_file)
+            if len(df) <= 1:
+                return  # Not enough points to plot
+            steps = df['step']
+            losses = df['loss']
+
+            # Plot with log scale on y-axis
+            curve_path = self.decoder_curve_file
+            fig, ax = plt.subplots(figsize=(10, 5))
+            ax.plot(steps, losses, 'r-')
+            ax.set_xlabel("Training Step")
+            ax.set_ylabel("MSE Loss (log)")
+            ax.set_title("Decoder Loss Curve")
+            ax.set_yscale('log')
+            ax.grid(True, which='both', alpha=0.3)
+            plt.savefig(curve_path, bbox_inches='tight')
+            plt.close(fig)
+            print(f"📉 Saved decoder loss curve to {curve_path}")
+        except Exception as e:
+            print(f"Warning: Could not plot decoder loss curve. Error: {e}")
 
 # Integration function for easy use in training loop
 def create_simple_encoding_monitor(cfg, encoder, env, save_dir=None, agent=None, buffer=None):

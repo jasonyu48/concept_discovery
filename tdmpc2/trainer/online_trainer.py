@@ -165,6 +165,13 @@ class OnlineTrainer(Trainer):
 				report = self.agent.encoding_monitor.generate_simple_report()
 				print(report)
 				
+				# Generate decoder GIFs once training is done (if enabled)
+				if getattr(self.cfg, 'enable_decoder', False):
+					try:
+						self.agent.encoding_monitor.save_decoder_gifs(num_gifs=5)
+					except Exception as e:
+						print(f"⚠️ Failed to generate final decoder GIFs: {e}")
+				
 				# Save final monitoring data
 				self.agent.encoding_monitor.save_monitoring_data()
 				

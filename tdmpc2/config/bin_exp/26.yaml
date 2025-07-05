@@ -10,21 +10,16 @@ episodic: false
 # evaluation
 checkpoint: ???
 eval_episodes: 10
-eval_freq: 10000
+eval_freq: 10_000
 
 # training
-steps: 20_000
+steps: 350_000
 batch_size: 256
 reward_coef: 0.1
 value_coef: 0.1
 termination_coef: 1
 consistency_coef: 20
 pi_coef: 0.11
-ortho_reg_coef: 0.005
-ortho_reg: false
-full_rank_reg: false
-full_rank_reg_coef: 0.005
-full_rank_reg_num_samples: 128  # Number of observation samples for full rank regularization
 collapse_prevention: false  # enable/disable random-function predictor mechanism
 collapse_prevention_dim: 256
 collapse_prevention_network: linear
@@ -40,7 +35,7 @@ discount_min: 0.95
 discount_max: 0.995
 buffer_size: 100_000
 q_sample_ratio: 1.0  # Ratio of buffer data visible to Q-function and collapse prevention training (0.0-1.0)
-exp_name: TEST_decoder
+exp_name: 26_bin
 data_dir: ???
 JEPA_sg: false
 grad_from_Q: true
@@ -51,9 +46,9 @@ grad_from_policy: false
 compile: false
 save_video: false
 save_agent: true
-seed: 2019
-monitor_freq: 5000
-dim_monitor_steps: 5000
+seed: 2020
+monitor_freq: 10_000
+dim_monitor_steps: 100_000
 full_rank: false
 simnorm: false
 simnorm_dim: 8
@@ -83,7 +78,7 @@ log_std_max: 2
 entropy_coef: 1e-4
 
 # critic
-num_bins: 101
+num_bins: 26
 vmin: -10
 vmax: +10
 

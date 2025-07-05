@@ -33,7 +33,7 @@ class TDMPC2(torch.nn.Module):
 		# --------------------------------------------------
 		if getattr(self.cfg, "enable_decoder", False):
 			# Logging and plotting files
-			self.decoder_loss_file = Path(self.cfg.work_dir) / self.cfg.decoder_loss_file
+			self.decoder_loss_file = Path(self.cfg.work_dir) / getattr(self.cfg, 'decoder_loss_file', 'DecoderLoss.txt')
 			self.decoder_loss_file.write_text("step,loss\n")
 			self.decoder_curve_file = self.decoder_loss_file.with_name('DecoderLossCurve.png')
 			self.decoder_steps, self.decoder_losses = [], []
@@ -286,19 +286,6 @@ class TDMPC2(torch.nn.Module):
 		discount = self.discount[task].unsqueeze(-1) if self.cfg.multitask else self.discount
 		return reward + discount * (1-terminated) * self.model.Q(next_z, action, task, return_type='min', target=True)
 
-	def _plot_decoder_loss(self):
-		"""Generates and saves a plot of the decoder loss."""
-		try:
-			fig, ax = plt.subplots(figsize=(10, 5))
-			ax.plot(self.decoder_steps, self.decoder_losses)
-			ax.set_xlabel("Training Step")
-			ax.set_ylabel("MSE Loss")
-			ax.set_title("Decoder Loss Curve")
-			ax.grid(True)
-			plt.savefig(self.decoder_curve_file, bbox_inches='tight')
-			plt.close(fig)
-		except Exception as e:
-			print(f"Warning: Could not plot decoder loss curve. Error: {e}")
 
 	def _update(self, obs, action, reward, terminated, q_mask=None, task=None, step=None, pretrain_step=-1):
 		# Prepare for update
@@ -324,16 +311,20 @@ class TDMPC2(torch.nn.Module):
 			pred_rgb = pred_rgb.reshape_as(rgb_norm)
 			dec_loss = F.mse_loss(pred_rgb, rgb_norm)
 
-			# Logging / plotting (no step yet)
-			self.decoder_steps.append(step)
-			self.decoder_losses.append(dec_loss.item())
-			if self.decoder_loss_file is not None:
-				with self.decoder_loss_file.open("a") as f:
-					f.write(f"{step},{dec_loss.item():.6f}\n")
-			if len(self.decoder_steps) > 1 and step > 0 and step % self.cfg.monitor_freq == 0:
-				self._plot_decoder_loss()
-			if hasattr(self, "logger"):
-				self.logger.log("decoder_loss", dec_loss.item(), step)
+			# Logging / plotting
+			if pretrain_step == -1:
+				actual_step = step
+			else:
+				actual_step = pretrain_step
+			if actual_step % 1000 == 0:
+				# Record decoder loss sparsely to keep memory usage low
+				self.decoder_steps.append(actual_step)
+				self.decoder_losses.append(dec_loss.item())
+				if self.decoder_loss_file is not None:
+					with self.decoder_loss_file.open("a") as f:
+						f.write(f"{actual_step},{dec_loss.item():.6f}\n")
+				if hasattr(self, "logger"):
+					self.logger.log("decoder_loss", dec_loss.item(), step)
 
 		##### end of decoder training
 
@@ -484,7 +475,7 @@ class TDMPC2(torch.nn.Module):
 			info.update(math.termination_statistics(torch.sigmoid(termination_pred[-1]), terminated[-1]))
 		
 		# Monitor encoding space if available (simplified)
-		if hasattr(self, 'encoding_monitor') and self.encoding_monitor is not None and (pretrain_step < 0 or pretrain_step+1 == self.cfg.monitor_freq):
+		if hasattr(self, 'encoding_monitor') and self.encoding_monitor is not None and (pretrain_step < 0 or pretrain_step+1 == self.cfg.seed_steps):
 			encoding_metrics = self.encoding_monitor.monitor_step(step)
 			if encoding_metrics:  # Only add if monitoring was performed
 				info.update({
