@@ -742,6 +742,20 @@ class SimpleEncodingSpaceMonitor:
             obs_tensor = obs_tensor.view(-1, *obs_tensor.shape[-3:])
 
         # -------------------------------------------------
+        # 0.5  Determine which steps are *visible* to the Q-function
+        # -------------------------------------------------
+        if self.buffer._q_sample_ratio != 1.0:
+            print("⚠️ Buffer is not fully visible to the Q-function, getting visible steps from buffer")
+            episode_ids = td_all.get('episode', None)
+            episode_ids_cpu = episode_ids.view(-1).to('cpu')
+            visible_mask = torch.tensor([
+                self.buffer._episode_visible.get(int(ep_id), False) for ep_id in episode_ids_cpu
+            ], dtype=torch.bool)
+            visible_idx = visible_mask.nonzero(as_tuple=False).view(-1)
+        else:
+            visible_idx = torch.arange(obs_tensor.shape[0])
+
+        # -------------------------------------------------
         # 1.5  Encode observations in manageable batches
         # -------------------------------------------------
         encode_batch = self.monitor_batch_size
@@ -761,8 +775,13 @@ class SimpleEncodingSpaceMonitor:
             return {}
 
         # -------------------------------------------------
-        # 3. Build stacked q outputs P(s) for probe actions
+        # 3. Build stacked q outputs P(s) ONLY for *visible* samples
         # -------------------------------------------------
+        if visible_idx.numel() >= 1:
+            z_vis = z[visible_idx.to(self.device)]
+        else:
+            z_vis = z.new_empty((0, z.shape[1]))  # empty tensor
+
         probe_actions = self._probe_actions.to(self.device)  # (M, A)
         num_bins = getattr(self.cfg, 'num_bins', 101)
 
@@ -770,9 +789,11 @@ class SimpleEncodingSpaceMonitor:
 
         batch_q = self.monitor_batch_size  # compute q in chunks
         with torch.no_grad():
-            for start in range(0, N, batch_q):
-                z_chunk = z[start:start+batch_q]  # (B, latent_dim)
+            for start in range(0, z_vis.shape[0], batch_q):
+                z_chunk = z_vis[start:start+batch_q]  # (B, latent_dim)
                 Bc = z_chunk.shape[0]
+                if Bc == 0:
+                    break
                 # Expand for M actions
                 z_rep = z_chunk.unsqueeze(1).repeat(1, self.M_actions, 1)
                 a_rep = probe_actions.unsqueeze(0).repeat(Bc, 1, 1)
@@ -784,17 +805,22 @@ class SimpleEncodingSpaceMonitor:
                 q_out = q_out.view(Bc, self.M_actions, num_bins).mean(1)  # (B, num_bins) average over actions
                 q_list.append(q_out)
 
-        P = torch.cat(q_list, dim=0)  # (N, M*num_bins)
+        if len(q_list) > 0:
+            P = torch.cat(q_list, dim=0)  # (N_vis, num_bins)
+        else:
+            P = torch.empty((0, num_bins), device=self.device)
 
         # -------------------------------------------------
-        # 4. Compute pairwise distances for z and P
+        # 4. Compute pairwise distances – z (all) and P (visible only)
         # -------------------------------------------------
-        # Use memory-efficient computation
         avg_dis, min_dis = self._pairwise_distance_stats_large(
             z, batch_size=self.monitor_batch_size, max_samples=self.pd_max_samples)
 
-        avg_dis_p, min_dis_p = self._pairwise_distance_stats_large(
-            P, batch_size=self.monitor_batch_size, max_samples=self.pd_max_samples)
+        if P.shape[0] >= 2:
+            avg_dis_p, min_dis_p = self._pairwise_distance_stats_large(
+                P, batch_size=self.monitor_batch_size, max_samples=self.pd_max_samples)
+        else:
+            avg_dis_p, min_dis_p = float('nan'), float('nan')
 
         # -------------------------------------------------
         # 5. Radius R and dimensionality estimate (z)
@@ -819,13 +845,14 @@ class SimpleEncodingSpaceMonitor:
         # 5c. Dimension estimates based on P-space distances & Lipschitz K
         # -------------------------------------------------
         est_dim_p_avg = est_dim_p_min = float('nan')
-        if self.enable_lipschitz and not np.isnan(K_est):
+        N_vis = int(z_vis.shape[0])
+        if self.enable_lipschitz and not np.isnan(K_est) and N_vis >= 2 and avg_dis_p > eps and min_dis_p > eps:
             try:
-                est_dim_p_avg = float(np.log(max(N, 2)) / np.log(1 + 2 * R * K_est / (avg_dis_p + eps))) if avg_dis_p > eps else float('nan')
+                est_dim_p_avg = float(np.log(max(N_vis, 2)) / np.log(1 + 2 * R * K_est / (avg_dis_p + eps))) if avg_dis_p > eps else float('nan')
             except ZeroDivisionError:
                 est_dim_p_avg = float('nan')
             try:
-                est_dim_p_min = float(np.log(max(N, 2)) / np.log(1 + 2 * R * K_est / (min_dis_p + eps))) if min_dis_p > eps else float('nan')
+                est_dim_p_min = float(np.log(max(N_vis, 2)) / np.log(1 + 2 * R * K_est / (min_dis_p + eps))) if min_dis_p > eps else float('nan')
             except ZeroDivisionError:
                 est_dim_p_min = float('nan')
 

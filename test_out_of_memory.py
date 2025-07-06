@@ -67,17 +67,39 @@ class DummyAgent:
 
 # --- ultra-light dummy buffer ------------------------------------
 class DummyStorage:
-    def __init__(self, obs): self._obs = obs
+    """Mimics LazyTensorStorage with minimal functionality needed by the monitor.
+
+    It stores observation tensors *and* corresponding episode IDs so the monitor can
+    derive per-step visibility via `buffer._episode_visible`."""
+
+    def __init__(self, obs, episode_ids):
+        self._obs = obs
+        self._episode_ids = episode_ids
+
     def __getitem__(self, sl):
-        return {"obs": self._obs[sl]}
+        return {"obs": self._obs[sl], "episode": self._episode_ids[sl]}
 
 class DummyBuffer:
-    def __init__(self, obs):
+    """Ultra-light buffer exposing only the attributes used by the monitor:
+        * _buffer._storage supporting slice 
+        * _episode_visible dict controlling Q-visibility per episode
+        * _steps_in_buffer and num_eps counters
+    """
+
+    def __init__(self, obs, episode_ids, episode_visible, q_sample_ratio=0.5):
         self._steps_in_buffer = obs.shape[0]
+
         dummy = SimpleNamespace()
-        dummy._storage = DummyStorage(obs)
+        dummy._storage = DummyStorage(obs, episode_ids)
         self._buffer = dummy
-        self.num_eps = 1
+
+        # Visibility map as required by monitor
+        self._episode_visible = episode_visible  # dict: episode_id -> bool
+
+        # Ratio of episodes visible to Q-function as expected by monitor
+        self._q_sample_ratio = q_sample_ratio
+
+        self.num_eps = max(episode_ids.tolist()) + 1
 
 # -----------------------------------------------------------------
 def main(args):
@@ -89,6 +111,13 @@ def main(args):
 
     # Allocate all observations on the *CPU* to mimic default buffer choice
     obs = torch.randn(N, C, H, W)
+
+    # ---------------------------------------------------------------
+    # Create episode IDs and visibility mask → half of episodes visible
+    # ---------------------------------------------------------------
+    # For simplicity assign one step per episode
+    episode_ids = torch.arange(N, dtype=torch.int64)
+    episode_visible = {int(ep): (ep % 2 == 0) for ep in episode_ids.tolist()}  # even IDs visible
 
     # Create a small dummy observation file for baseline sampling
     rankme_path = Path("dummy_rankme_obs.pt")
@@ -118,7 +147,7 @@ def main(args):
     env    = DummyEnv(cfg.action_dim)
     model  = DummyModel(obs_dim=C*H*W).to(device)
     agent  = DummyAgent(model)
-    buffer = DummyBuffer(obs)
+    buffer = DummyBuffer(obs, episode_ids, episode_visible)
 
     monitor = SimpleEncodingSpaceMonitor(
         cfg     = cfg,
@@ -130,11 +159,6 @@ def main(args):
         save_dir= Path("tmp_monitor"),
     )
 
-    # ------------------------------------------------------------------
-    # Simulate a training step where neither monitor_freq nor dim_monitor_steps
-    # divide the current step (e.g. step=1234) so monitor_step returns quickly.
-    # Then force a full-dataset metric computation to measure memory.
-    # ------------------------------------------------------------------
     # Choose a step that is a common multiple of monitor_freq (2000) and
     # dim_monitor_steps (5000) so both conditions are TRUE → monitoring happens.
     step_lcm = 10_000  # lcm(2000, 5000)
