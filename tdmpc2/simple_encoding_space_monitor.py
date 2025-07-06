@@ -116,7 +116,6 @@ class SimpleEncodingSpaceMonitor:
         # RankMe setup (needed for baseline observation sampling)
         # -------------------------------------------------------------
         self.rankme_samples = getattr(self.cfg, 'rankme_samples', 30000)
-        self.rankme_batch_size = 1024
         default_rankme_path = f"/scratch/tshu2/jyu197/obs_data/{getattr(self.cfg, 'task', 'unknown')}/obs/observations.pt"
         self.rankme_obs_path = Path(getattr(self.cfg, 'rankme_obs_path', default_rankme_path))
         self._rankme_observations = None  # Lazy loaded
@@ -194,6 +193,12 @@ class SimpleEncodingSpaceMonitor:
         # -------------------------------------------------------------
         self.decoder_loss_file = Path(getattr(cfg, 'work_dir', '.')) / getattr(cfg, 'decoder_loss_file', 'DecoderLoss.txt')
         self.decoder_curve_file = self.save_dir / 'DecoderLossCurve.png'
+        
+        # Unified batch size for all monitoring computations
+        self.monitor_batch_size = getattr(self.cfg, 'monitor_batch_size', 1024)
+
+        # Pairwise distance computation parameters (memory-friendly)
+        self.pd_max_samples = getattr(self.cfg, 'dim_pd_max_samples', 1000000)
         
     def _sample_baseline_observations(self):
         """Sample baseline observations from saved observation data using cfg.seed"""
@@ -590,8 +595,8 @@ class SimpleEncodingSpaceMonitor:
         # Encode in large batches on GPU using specified model
         encodings = []
         with torch.no_grad():
-            for i in range(0, num_samples, self.rankme_batch_size):
-                batch = obs_sample[i:i+self.rankme_batch_size]
+            for i in range(0, num_samples, self.monitor_batch_size):
+                batch = obs_sample[i:i+self.monitor_batch_size]
                 if self.cfg.multitask:
                     raise NotImplementedError("do not support multi-task encoders")
                 enc = model(batch)
@@ -739,7 +744,7 @@ class SimpleEncodingSpaceMonitor:
         # -------------------------------------------------
         # 1.5  Encode observations in manageable batches
         # -------------------------------------------------
-        encode_batch = getattr(self.cfg, 'dim_encode_batch_size', 1024)
+        encode_batch = self.monitor_batch_size
         enc_list = []
         with torch.no_grad():
             for start in range(0, obs_tensor.shape[0], encode_batch):
@@ -763,7 +768,7 @@ class SimpleEncodingSpaceMonitor:
 
         q_list = []  # will collect on GPU then CPU
 
-        batch_q = encode_batch  # compute q in chunks
+        batch_q = self.monitor_batch_size  # compute q in chunks
         with torch.no_grad():
             for start in range(0, N, batch_q):
                 z_chunk = z[start:start+batch_q]  # (B, latent_dim)
@@ -784,18 +789,12 @@ class SimpleEncodingSpaceMonitor:
         # -------------------------------------------------
         # 4. Compute pairwise distances for z and P
         # -------------------------------------------------
-        pdists = torch.cdist(z, z)  # (N, N)
-        triu = torch.triu_indices(N, N, offset=1)
-        d_vals = pdists[triu[0], triu[1]]
-        avg_dis = float(d_vals.mean().item())
-        min_dis = float(d_vals.min().item())
-        # P distances
-        pdists_p = torch.cdist(P, P)  # (N,N)
-        d_vals_p = pdists_p[triu[0], triu[1]]
-        avg_dis_p = float(d_vals_p.mean().item())
-        min_dis_p = float(d_vals_p.min().item())
+        # Use memory-efficient computation
+        avg_dis, min_dis = self._pairwise_distance_stats_large(
+            z, batch_size=self.monitor_batch_size, max_samples=self.pd_max_samples)
 
-
+        avg_dis_p, min_dis_p = self._pairwise_distance_stats_large(
+            P, batch_size=self.monitor_batch_size, max_samples=self.pd_max_samples)
 
         # -------------------------------------------------
         # 5. Radius R and dimensionality estimate (z)
@@ -859,6 +858,59 @@ class SimpleEncodingSpaceMonitor:
         }
 
     # -------------------------------------------------------------
+    # Memory-efficient pairwise distance stats for large datasets
+    # -------------------------------------------------------------
+    def _pairwise_distance_stats_large(self, X: torch.Tensor, batch_size: int = 1024, max_samples: int = 1000000):
+        """Compute average & minimum pairwise L2 distance of rows in X without allocating the full NxN matrix.
+
+        Args:
+            X:          Tensor of shape (N, D)
+            batch_size: Chunk size for distance computation.
+            max_samples:If N > max_samples, randomly subsample to this many points first.
+
+        Returns:
+            (avg_distance, min_distance) tuple as floats.
+        """
+        if X.ndim > 2:
+            X = X.view(X.shape[0], -1)
+        N = X.shape[0]
+        device = X.device
+
+        # Optional subsampling to keep computation reasonable
+        if N > max_samples:
+            idx = torch.randperm(N, device=device)[:max_samples]
+            X = X[idx]
+            N = max_samples
+
+        total_sum = 0.0
+        total_pairs = 0
+        min_dist = float('inf')
+
+        for i in range(0, N, batch_size):
+            Xi = X[i:min(i + batch_size, N)]
+            for j in range(i, N, batch_size):
+                Xj = X[j:min(j + batch_size, N)]
+                dist_block = torch.cdist(Xi, Xj)  # (bi, bj)
+
+                if i == j:
+                    # Use upper triangle without the diagonal
+                    triu_idx = torch.triu_indices(dist_block.shape[0], dist_block.shape[1], offset=1, device=device)
+                    dvals = dist_block[triu_idx[0], triu_idx[1]]
+                else:
+                    dvals = dist_block.flatten()
+
+                if dvals.numel() == 0:
+                    continue
+                total_sum += dvals.sum().item()
+                total_pairs += dvals.numel()
+                block_min = dvals.min().item()
+                if block_min < min_dist:
+                    min_dist = block_min
+
+        avg_dist = total_sum / total_pairs if total_pairs > 0 else float('nan')
+        return avg_dist, min_dist
+
+    # -------------------------------------------------------------
     # Lipschitz constant estimation helpers
     # -------------------------------------------------------------
     def _estimate_lipschitz(self, z_tensor: torch.Tensor) -> float:
@@ -906,7 +958,7 @@ class SimpleEncodingSpaceMonitor:
         for start in range(0, z_subset.shape[0], batch_size):
             z_batch = z_subset[start:start + batch_size]
             # Vectorised evaluation within the current batch
-            spec_vals = vmap(single_spectral)(z_batch)
+            spec_vals = vmap(single_spectral, randomness="same")(z_batch)
             batch_max = spec_vals.max().item()
             if batch_max > max_spec_val:
                 max_spec_val = batch_max
