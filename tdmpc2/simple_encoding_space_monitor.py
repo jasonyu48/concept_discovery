@@ -46,6 +46,9 @@ class SimpleEncodingSpaceMonitor:
         self.save_dir = Path(save_dir) if save_dir else Path("simple_encoding_logs")
         self.save_dir.mkdir(exist_ok=True)
         
+        # Unified batch size for all monitoring-related computations (encoding, distances, RankMe, etc.)
+        self.monitor_batch_size = getattr(self.cfg, 'monitor_batch_size', 1024)
+        
         # Monitoring configuration
         self.num_seed_obs = 64  # Number of diverse seed observations
         self.monitor_freq = self.cfg.get('monitor_freq', 2000)  # Monitor every N steps
@@ -194,9 +197,6 @@ class SimpleEncodingSpaceMonitor:
         self.decoder_loss_file = Path(getattr(cfg, 'work_dir', '.')) / getattr(cfg, 'decoder_loss_file', 'DecoderLoss.txt')
         self.decoder_curve_file = self.save_dir / 'DecoderLossCurve.png'
         
-        # Unified batch size for all monitoring computations
-        self.monitor_batch_size = getattr(self.cfg, 'monitor_batch_size', 1024)
-
         # Pairwise distance computation parameters (memory-friendly)
         self.pd_max_samples = getattr(self.cfg, 'dim_pd_max_samples', 1000000)
         

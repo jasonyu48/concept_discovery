@@ -93,14 +93,13 @@ def main(args):
     # Create a small dummy observation file for baseline sampling
     rankme_path = Path("dummy_rankme_obs.pt")
     if not rankme_path.exists():
-        torch.save(torch.randn(1000, 9, 64, 64), rankme_path)
+        torch.save(torch.randn(30000, 9, 64, 64), rankme_path)
 
     # ----- build monitor --------------------------------------------------
     cfg = Cfg(
         monitor_freq          = 2000,
         dim_monitor_steps     = 5000,
-        dim_encode_batch_size = 1024,
-        dim_pd_batch_size     = 1024,
+        monitor_batch_size    = 1024,
         dim_pd_max_samples    = 1000000,
         action_dim            = 6,
         num_q                 = 1,
@@ -131,11 +130,51 @@ def main(args):
         save_dir= Path("tmp_monitor"),
     )
 
-    torch.cuda.reset_peak_memory_stats(device)
-    print("↪ running compute_full_dim_metrics ...")
-    monitor.compute_full_dim_metrics()
-    peak = torch.cuda.max_memory_allocated(device) / 1024**3
-    print(f"✅ peak GPU memory: {peak:.2f} GB")
+    # ------------------------------------------------------------------
+    # Simulate a training step where neither monitor_freq nor dim_monitor_steps
+    # divide the current step (e.g. step=1234) so monitor_step returns quickly.
+    # Then force a full-dataset metric computation to measure memory.
+    # ------------------------------------------------------------------
+    # Choose a step that is a common multiple of monitor_freq (2000) and
+    # dim_monitor_steps (5000) so both conditions are TRUE → monitoring happens.
+    step_lcm = 10_000  # lcm(2000, 5000)
+
+    torch.cuda.synchronize(device)
+    before_mem = query_gpu_mem(torch.cuda.current_device()) / 1024  # GiB
+
+    print(f"↪ running monitor_step({step_lcm}) – should TRIGGER full monitoring ...")
+    metrics_out = monitor.monitor_step(step=step_lcm)
+    print("   returned metrics keys:", list(metrics_out.keys()))
+
+    torch.cuda.synchronize(device)
+    after_mem = query_gpu_mem(torch.cuda.current_device()) / 1024  # GiB
+
+    peak_alloc = torch.cuda.max_memory_allocated(device) / 1024**3
+    print(f"🚀  GPU memory   before monitor   : {before_mem:.2f} GiB")
+    print(f"🚀  GPU memory    after monitor   : {after_mem:.2f} GiB")
+    print(f"🚀  Peak memory reported by PyTorch: {peak_alloc:.2f} GiB")
+
+# ---------------------------------------------------------------
+# Helper to query actual GPU memory (via gpustat or nvidia-smi)
+# ---------------------------------------------------------------
+def query_gpu_mem(device_idx=0):
+    """Return used GPU memory in MiB for the given CUDA device."""
+    try:
+        import gpustat  # type: ignore
+        stats = gpustat.new_query()[device_idx]
+        return stats.memory_used
+    except Exception:
+        # Fallback: nvidia-smi via subprocess (may be slower)
+        import subprocess, json, os, re
+        try:
+            smi = subprocess.check_output([
+                "nvidia-smi", "--query-gpu=memory.used", "--format=csv,nounits,noheader"
+            ], env={**os.environ, "CUDA_VISIBLE_DEVICES": ""})
+            vals = [int(x) for x in smi.decode().strip().split("\n") if x]
+            return vals[device_idx] if vals else -1
+        except Exception:
+            # Last fallback: torch's allocator (may under-report)
+            return int(torch.cuda.memory_allocated(device_idx) / 1024**2)
 
 if __name__ == "__main__":
     p = argparse.ArgumentParser()

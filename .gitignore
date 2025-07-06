@@ -131,3 +131,6 @@ dmypy.json
 
 # MNIST
 *MNIST
+
+# Dummy files
+dummy_rankme_obs.pt
