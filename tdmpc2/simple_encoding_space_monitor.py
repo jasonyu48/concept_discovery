@@ -62,7 +62,6 @@ class SimpleEncodingSpaceMonitor:
         self.enable_jacobian_rank = getattr(self.cfg, 'monitor_jacobian_rank', True) 
         self.enable_rankme = getattr(self.cfg, 'monitor_rankme', True)
         self.enable_eval_reward = getattr(self.cfg, 'monitor_eval_reward', True)
-        self.enable_lipschitz = getattr(self.cfg, 'monitor_lipschitz', True)
         
         # Simple storage for monitoring data
         self.monitoring_data = {
@@ -84,23 +83,15 @@ class SimpleEncodingSpaceMonitor:
         # -----------------------------------------------------------------
         # Pre-sample probe actions (fixed throughout run) for q-distance
         # -----------------------------------------------------------------
-        self.M_actions = getattr(self.cfg, 'dim_probe_actions', 16)
-        action_dim = getattr(self.cfg, 'action_dim', None)
-        if action_dim is None and hasattr(self.cfg, 'action_dims'):
-            action_dim = self.cfg.action_dims[0]
-        if action_dim is None:
-            action_dim = 6  # sensible default
+        self.M_actions = getattr(self.cfg, 'dim_probe_actions', 64)
         torch.manual_seed(1234)
         probe_actions = []
         for _ in range(self.M_actions):
-            # if hasattr(self.env, 'rand_act'):
             a = self.env.rand_act()
             if isinstance(a, torch.Tensor):
                 a = a.clone().detach().cpu().float()
             else:
                 a = torch.from_numpy(a).float()
-            # else:
-                # a = torch.tensor(self.env.action_space.sample(), dtype=torch.float32)
             probe_actions.append(a)
         self._probe_actions = torch.stack(probe_actions, dim=0)  # (M, A)
         torch.manual_seed(self.cfg.seed)
@@ -112,8 +103,7 @@ class SimpleEncodingSpaceMonitor:
             self.monitoring_data['min_jacobian_rank'] = []
         if self.enable_rankme:
             self.monitoring_data['rankme'] = []
-        if self.enable_lipschitz:
-            self.monitoring_data['lipschitz_K'] = []
+        self.monitoring_data['lipschitz_K'] = []
         
         # -------------------------------------------------------------
         # RankMe setup (needed for baseline observation sampling)
@@ -374,7 +364,8 @@ class SimpleEncodingSpaceMonitor:
             # Neither encoding nor dimension monitoring is scheduled
             return {}
         
-        # start_time = time.time()
+        self.agent.model.eval()
+        self.encoder.eval()
         
         # Update encodings with current encoder
         self._update_baseline_encodings()
@@ -433,6 +424,9 @@ class SimpleEncodingSpaceMonitor:
         # Save model periodically to same path (every 5 monitoring steps)
         if step % (self.monitor_freq * 5) == 0:
             self._save_model_checkpoint(step)
+
+        self.agent.model.train()
+        self.encoder.train()
 
         return metrics
     
@@ -827,34 +821,36 @@ class SimpleEncodingSpaceMonitor:
         # -------------------------------------------------
         R = float(z.norm(dim=1).max().item())
         eps = 1e-10
+        est_dim_avg = est_dim_min = float(-114514)
         try:
-            est_dim_avg = float(np.log(max(N, 2)) / np.log(1 + 2 * R / (avg_dis + eps))) if avg_dis > eps else float('nan')
+            est_dim_avg = float(np.log(N) / np.log(1 + 2 * R / (avg_dis + eps))) if avg_dis > eps else float('nan')
         except ZeroDivisionError:
             est_dim_avg = float('nan')
-        est_dim_min = float(np.log(max(N, 2)) / np.log(1 + 2 * R / (min_dis + eps))) if min_dis > eps else float('nan')
+        try:
+            est_dim_min = float(np.log(N) / np.log(1 + 2 * R / (min_dis + eps))) if min_dis > eps else float('nan')
+        except ZeroDivisionError:
+            est_dim_min = float('nan')
 
         # -------------------------------------------------
         # 5b. Lipschitz constant estimation (subset of z)
         # -------------------------------------------------
-        if self.enable_lipschitz:
-            K_est = self._estimate_lipschitz(z)
-            self.monitoring_data['lipschitz_K'].append(K_est)
-            print(f"🧮 Estimated Lipschitz Constant: {K_est:.4f}")
+        K_est = self._estimate_lipschitz(z)
+        self.monitoring_data['lipschitz_K'].append(K_est)
+        print(f"🧮 Estimated Lipschitz Constant: {K_est:.4f}")
 
         # -------------------------------------------------
         # 5c. Dimension estimates based on P-space distances & Lipschitz K
         # -------------------------------------------------
-        est_dim_p_avg = est_dim_p_min = float('nan')
         N_vis = int(z_vis.shape[0])
-        if self.enable_lipschitz and not np.isnan(K_est) and N_vis >= 2 and avg_dis_p > eps and min_dis_p > eps:
-            try:
-                est_dim_p_avg = float(np.log(max(N_vis, 2)) / np.log(1 + 2 * R * K_est / (avg_dis_p + eps))) if avg_dis_p > eps else float('nan')
-            except ZeroDivisionError:
-                est_dim_p_avg = float('nan')
-            try:
-                est_dim_p_min = float(np.log(max(N_vis, 2)) / np.log(1 + 2 * R * K_est / (min_dis_p + eps))) if min_dis_p > eps else float('nan')
-            except ZeroDivisionError:
-                est_dim_p_min = float('nan')
+        est_dim_p_avg = est_dim_p_min = float(-114514)
+        try:
+            est_dim_p_avg = float(np.log(N_vis) / np.log(1 + 2 * R * K_est / (avg_dis_p + eps))) if avg_dis_p > eps else float('nan')
+        except ZeroDivisionError:
+            est_dim_p_avg = float('nan')
+        try:
+            est_dim_p_min = float(np.log(N_vis) / np.log(1 + 2 * R * K_est / (min_dis_p + eps))) if min_dis_p > eps else float('nan')
+        except ZeroDivisionError:
+            est_dim_p_min = float('nan')
 
         # -------------------------------------------------
         # 6. Record and return
@@ -879,7 +875,7 @@ class SimpleEncodingSpaceMonitor:
             'min_dis_p_full': min_dis_p,
             'est_dim_avg_full': est_dim_avg,
             'est_dim_min_full': est_dim_min,
-            'lipschitz_K_full': K_est if self.enable_lipschitz else None,
+            'lipschitz_K_full': K_est,
             'est_dim_p_avg_full': est_dim_p_avg,
             'est_dim_p_min_full': est_dim_p_min,
         }
@@ -940,7 +936,7 @@ class SimpleEncodingSpaceMonitor:
     # -------------------------------------------------------------
     # Lipschitz constant estimation helpers
     # -------------------------------------------------------------
-    def _estimate_lipschitz(self, z_tensor: torch.Tensor) -> float:
+    def _estimate_lipschitz(self, z_tensor: torch.Tensor, L: int = 16384) -> float:
         """Estimate Lipschitz constant K_theta (w.r.t latent z).
 
         Finds the maximum spectral norm of the Jacobian of the stacked q outputs
@@ -948,10 +944,7 @@ class SimpleEncodingSpaceMonitor:
         """
         assert self.cfg.num_q == 1, "Lipschitz constant estimation only supported for single-Q model"
         assert self.cfg.num_bins >= 2, "num_bins must be at least 2"
-        if not self.enable_lipschitz:
-            return float('nan')
 
-        L = getattr(self.cfg, 'dim_lipschitz_samples', 64)
         N = z_tensor.shape[0]
         if N == 0:
             return float('nan')
@@ -979,7 +972,7 @@ class SimpleEncodingSpaceMonitor:
             return svals.max()
 
         # Compute spectral norms in manageable chunks to lower memory footprint
-        batch_size = 16  # process this many latent samples at a time
+        batch_size = 32  # process this many latent samples at a time
         max_spec_val = float('-inf')
 
         for start in range(0, z_subset.shape[0], batch_size):

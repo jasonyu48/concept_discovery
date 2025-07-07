@@ -205,59 +205,6 @@ class Buffer():
 								 dtype=torch.bool, device=self._device)
 		return batch_mask
 
-	def _update_q_mask_on_new_episodes(self):
-		"""Update the mask for Q-function training when new episodes are added.
-		Keeps existing visible episodes unchanged, only assigns visibility to new episodes.
-		Allows for slight imprecision in ratio when total episodes is odd.
-		"""
-		if self._num_eps == 0:
-			self._episode_visible = {}
-			self._q_mask_episodes = 0
-			return
-		
-		if self._q_sample_ratio >= 1.0:
-			self._episode_visible = {ep_id: True for ep_id in range(self._num_eps)}
-			self._q_mask_episodes = self._num_eps
-			return
-		
-		old_num_eps = len(self._episode_visible) if self._episode_visible is not None else 0
-		
-		if old_num_eps == 0:
-			# First time creating mask - initial setup
-			# Use round() instead of int() to handle odd numbers better
-			num_visible = round(self._num_eps * self._q_sample_ratio)
-			self._episode_visible = {ep_id: False for ep_id in range(self._num_eps)}
-			if num_visible > 0:
-				perm = torch.randperm(self._num_eps)
-				visible_indices = perm[:num_visible]
-				for ep_id in visible_indices:
-					self._episode_visible[ep_id] = True
-			self._q_mask_episodes = num_visible
-			
-		elif self._num_eps > old_num_eps:
-			# New episodes added - extend mask but keep old visible episodes unchanged
-			new_episodes_count = self._num_eps - old_num_eps
-			old_visible = {ep_id: visible for ep_id, visible in self._episode_visible.items() if visible}
-			current_visible = len(old_visible)
-			
-			# Calculate target visible episodes with rounding for better handling of odd numbers
-			target_visible = round(self._num_eps * self._q_sample_ratio)
-			
-			# How many of the new episodes should be visible
-			new_visible_needed = max(0, target_visible - current_visible)
-			new_visible = min(new_visible_needed, new_episodes_count)
-			
-			# Create mask for new episodes (randomly select)
-			new_visible_episodes = {ep_id: False for ep_id in range(old_num_eps, self._num_eps)}
-			if new_visible > 0:
-				new_perm = torch.randperm(new_episodes_count)
-				new_visible_episodes_perm = new_perm[:new_visible]
-				for ep_id in new_visible_episodes_perm:
-					new_visible_episodes[old_num_eps + ep_id] = True
-			
-			# Combine old and new masks
-			self._episode_visible = {**old_visible, **new_visible_episodes}
-			self._q_mask_episodes = len(self._episode_visible)
 
 	@property
 	def q_visible_episodes(self):
@@ -357,10 +304,22 @@ class Buffer():
 		# ------------------------------------------------------------------
 		# 2. Decide visibility for the new episode
 		# ------------------------------------------------------------------
+		# We want the *running* fraction of visible episodes to match the
+		# target q_sample_ratio as closely as possible.  Instead of a
+		# Bernoulli coin-flip (which introduces random drift), use a
+		# deterministic rule: make the new episode visible **iff** the
+		# current number of visible episodes is below the rounded target
+		# count after adding this episode.
+
 		if self._q_sample_ratio >= 1.0:
 			visible = True
 		else:
-			visible = torch.rand(1).item() < self._q_sample_ratio
+			total_eps_after_insert = len(self._episode_visible) + 1  # +1 for the incoming episode
+			target_visible = round(total_eps_after_insert * self._q_sample_ratio)
+			# current visible BEFORE insertion
+			current_visible = self._q_mask_episodes
+			# Decide deterministically to hit the target as closely as possible
+			visible = current_visible < target_visible
 
 		# ------------------------------------------------------------------
 		# 3. Insert metadata for the new episode

@@ -46,7 +46,7 @@ grad_from_policy: false
 compile: false
 save_video: false
 save_agent: true
-seed: 2020
+seed: 2022
 monitor_freq: 10_000
 dim_monitor_steps: 100_000
 full_rank: false
