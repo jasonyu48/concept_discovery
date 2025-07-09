@@ -3,6 +3,7 @@
 # Purpose: Monitor encoding space size and changes over time (simplified version)
 
 import torch
+import torch.nn.functional as F
 from torch.func import jacrev, vmap
 import numpy as np
 from typing import List, Dict, Tuple, Optional
@@ -104,6 +105,9 @@ class SimpleEncodingSpaceMonitor:
         if self.enable_rankme:
             self.monitoring_data['rankme'] = []
         self.monitoring_data['lipschitz_K'] = []
+        self.enable_decoder_loss = getattr(self.cfg, 'enable_decoder', False) and self.cfg.obs == 'rgb'
+        if self.enable_decoder_loss:
+            self.monitoring_data['decoder_loss'] = []
         
         # -------------------------------------------------------------
         # RankMe setup (needed for baseline observation sampling)
@@ -152,6 +156,19 @@ class SimpleEncodingSpaceMonitor:
             else:
                 print("⚠️ RankMe observations not found or reptrix not installed; RankMe metric disabled.")
                 self.monitoring_data['rankme'].append(None)
+
+        # Initial decoder evaluation loss
+        if self.enable_decoder_loss:
+            try:
+                init_dec_loss = self._compute_decoder_eval_loss()
+                if init_dec_loss is not None:
+                    print(f"📉 Initial decoder evaluation loss: {init_dec_loss:.6f}")
+                else:
+                    print("📉 Initial decoder evaluation loss: N/A")
+                self.monitoring_data['decoder_loss'].append(init_dec_loss)
+            except Exception as e:
+                print(f"⚠️ Failed to compute initial decoder evaluation loss: {e}")
+                self.monitoring_data['decoder_loss'].append(None)
         
         # --- Collapse prevention: measure initial random function magnitude ---
         if getattr(self.cfg, 'collapse_prevention', False) and hasattr(self.agent.model, '_random_fn') and self.agent.model._random_fn is not None:
@@ -180,12 +197,6 @@ class SimpleEncodingSpaceMonitor:
                 print(f"🎲 Initial min rank of random function Jacobian: {random_rank}")
         else:
             initial_rand_mag = None
-        
-        # -------------------------------------------------------------
-        # Decoder loss tracking
-        # -------------------------------------------------------------
-        self.decoder_loss_file = Path(getattr(cfg, 'work_dir', '.')) / getattr(cfg, 'decoder_loss_file', 'DecoderLoss.txt')
-        self.decoder_curve_file = self.save_dir / 'DecoderLossCurve.png'
         
         # Pairwise distance computation parameters (memory-friendly)
         self.pd_max_samples = getattr(self.cfg, 'dim_pd_max_samples', 1000000)
@@ -352,6 +363,45 @@ class SimpleEncodingSpaceMonitor:
         ranks = torch.linalg.matrix_rank(jac_batch)
         return int(ranks.min().item())
     
+    # -------------------------------------------------------------
+    # Decoder evaluation helper
+    # -------------------------------------------------------------
+    def _compute_decoder_eval_loss(self) -> Optional[float]:
+        """Compute the decoder reconstruction MSE on the baseline observations."""
+        if not self.enable_decoder_loss:
+            return None
+
+        decoder = getattr(self.agent.model, '_decoder', None)
+        if decoder is None:
+            return None
+
+        obs = self.baseline_observations.to(self.device)
+        z = self.baseline_encodings.to(self.device)
+
+        prev_mode = decoder.training
+        decoder.eval()
+
+        batch_size = self.monitor_batch_size
+        total_loss = 0.0
+        total_samples = 0
+
+        with torch.no_grad():
+            for start in range(0, z.shape[0], batch_size):
+                z_b = z[start:start + batch_size]
+                pred = decoder(z_b)
+                pred = pred.reshape_as(obs[start:start + batch_size])
+                target = (obs[start:start + batch_size].float() / 255.0 - 0.5) * 2
+                batch_loss = F.mse_loss(pred, target, reduction='mean').item()
+                total_loss += batch_loss * z_b.size(0)
+                total_samples += z_b.size(0)
+
+        if prev_mode:
+            decoder.train()
+
+        if total_samples == 0:
+            return float('nan')
+        return total_loss / total_samples
+    
     def monitor_step(self, step: int) -> Dict[str, float]:
         """
         Perform monitoring at given training step - simplified version
@@ -402,6 +452,20 @@ class SimpleEncodingSpaceMonitor:
                     print(f"⚠️ Failed to compute RankMe: {e}")
             metrics['rankme'] = rankme_metric
             self.monitoring_data['rankme'].append(rankme_metric)
+        
+        # Decoder evaluation loss
+        if self.enable_decoder_loss:
+            if step % self.monitor_freq == 0:
+                dec_loss_val = self._compute_decoder_eval_loss()
+                metrics['decoder_loss'] = dec_loss_val
+                self.monitoring_data['decoder_loss'].append(dec_loss_val)
+                if dec_loss_val is not None:
+                    print(f"   Decoder eval loss: {dec_loss_val:.6f}")
+                else:
+                    print("   Decoder eval loss: N/A")
+            else:
+                # Maintain alignment of monitoring_data lists
+                self.monitoring_data['decoder_loss'].append(None)
         
         # -------------------------------------------------------------
         # Dimension monitoring (pairwise latent distance & estimated dim)
@@ -479,7 +543,7 @@ class SimpleEncodingSpaceMonitor:
         
         # Count enabled metrics to determine subplot layout
         enabled_metrics = [self.enable_encoding_space, self.enable_jacobian_rank, 
-                          self.enable_rankme, self.enable_eval_reward]
+                          self.enable_rankme, self.enable_eval_reward, self.enable_decoder_loss]
         num_enabled = sum(enabled_metrics)
         
         if num_enabled == 0:
@@ -544,17 +608,25 @@ class SimpleEncodingSpaceMonitor:
             ax.set_ylabel('Reward')
             ax.grid(True, alpha=0.3)
 
+        # Additional subplot: Decoder loss (log scale)
+        if self.enable_decoder_loss and 'decoder_loss' in self.monitoring_data:
+            dec_losses = np.array([l if l is not None else np.nan for l in self.monitoring_data['decoder_loss']])
+            if not np.all(np.isnan(dec_losses)):
+                ax = plt.subplot(rows, cols, subplot_idx)
+                ax.plot(steps, dec_losses, 'r-o', linewidth=2, markersize=4)
+                ax.set_title('Decoder Eval Loss', fontsize=12, fontweight='bold')
+                ax.set_xlabel('Training Steps')
+                ax.set_ylabel('MSE')
+                ax.set_yscale('log')
+                ax.grid(True, alpha=0.3)
+            subplot_idx += 1
+
         plt.tight_layout()
 
         if save_plot:
             plot_path = self.save_dir / "monitoring_curves.png"
             plt.savefig(plot_path, dpi=300, bbox_inches='tight')
             print(f"📊 Saved monitoring curves to {plot_path}")
-
-        # -----------------------------------------------
-        # Additionally plot decoder loss curve (if file/list available)
-        # -----------------------------------------------
-        self._plot_decoder_loss()
 
         return plt.gcf()
 
@@ -985,36 +1057,6 @@ class SimpleEncodingSpaceMonitor:
 
         K_est = float(max_spec_val)
         return K_est
-
-    # -------------------------------------------------------------
-    # Decoder loss plotting moved from agent → monitor
-    # -------------------------------------------------------------
-    def _plot_decoder_loss(self):
-        """Generate and save the decoder loss curve using data shared by the agent."""
-        try:
-            # Load from file written by the agent
-            if not self.decoder_loss_file.exists():
-                return  # No data yet
-            df = pd.read_csv(self.decoder_loss_file)
-            if len(df) <= 1:
-                return  # Not enough points to plot
-            steps = df['step']
-            losses = df['loss']
-
-            # Plot with log scale on y-axis
-            curve_path = self.decoder_curve_file
-            fig, ax = plt.subplots(figsize=(10, 5))
-            ax.plot(steps, losses, 'r-')
-            ax.set_xlabel("Training Step")
-            ax.set_ylabel("MSE Loss (log)")
-            ax.set_title("Decoder Loss Curve")
-            ax.set_yscale('log')
-            ax.grid(True, which='both', alpha=0.3)
-            plt.savefig(curve_path, bbox_inches='tight')
-            plt.close(fig)
-            print(f"📉 Saved decoder loss curve to {curve_path}")
-        except Exception as e:
-            print(f"Warning: Could not plot decoder loss curve. Error: {e}")
 
 # Integration function for easy use in training loop
 def create_simple_encoding_monitor(cfg, encoder, env, save_dir=None, agent=None, buffer=None):

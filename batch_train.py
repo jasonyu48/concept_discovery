@@ -344,7 +344,7 @@ class BatchTrainer:
 
 def main():
     parser = argparse.ArgumentParser(description='Batch training script for TD-MPC2')
-    parser.add_argument('--tasks', nargs='+', default=['N_exp'],
+    parser.add_argument('--tasks', nargs='+', default=['bin_exp2'],
                        help='List of tasks to run')
     parser.add_argument('--configs', nargs='+', default=None,
                        help='List of config variants to run (if not provided, will auto-discover from task directories)')

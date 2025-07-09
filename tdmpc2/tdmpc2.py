@@ -28,19 +28,6 @@ class TDMPC2(torch.nn.Module):
 		self.cfg = cfg
 		self.device = torch.device('cuda:0')
 		self.model = WorldModel(cfg).to(self.device)
-		# --------------------------------------------------
-		#  Decoder：activated when cfg.enable_decoder = True 
-		# --------------------------------------------------
-		if getattr(self.cfg, "enable_decoder", False):
-			# Logging and plotting files
-			self.decoder_loss_file = Path(self.cfg.work_dir) / getattr(self.cfg, 'decoder_loss_file', 'DecoderLoss.txt')
-			self.decoder_loss_file.write_text("step,loss\n")
-			self.decoder_curve_file = self.decoder_loss_file.with_name('DecoderLossCurve.png')
-			self.decoder_steps, self.decoder_losses = [], []
-		else:
-			self.decoder_loss_file = None
-			self.decoder_curve_file = None
-			self.decoder_steps, self.decoder_losses = [], []
 
 		# Build parameter groups for the main optimizer (optionally includes decoder)
 		param_groups = [
@@ -310,23 +297,6 @@ class TDMPC2(torch.nn.Module):
 			pred_rgb = self.model._decoder(z_detached.reshape(-1, z_detached.shape[-1]))
 			pred_rgb = pred_rgb.reshape_as(rgb_norm)
 			dec_loss = F.mse_loss(pred_rgb, rgb_norm)
-
-			# Logging / plotting
-			if pretrain_step == -1:
-				actual_step = step
-			else:
-				actual_step = pretrain_step
-			if actual_step % 1000 == 0:
-				# Record decoder loss sparsely to keep memory usage low
-				self.decoder_steps.append(actual_step)
-				self.decoder_losses.append(dec_loss.item())
-				if self.decoder_loss_file is not None:
-					with self.decoder_loss_file.open("a") as f:
-						f.write(f"{actual_step},{dec_loss.item():.6f}\n")
-				if hasattr(self, "logger"):
-					self.logger.log("decoder_loss", dec_loss.item(), step)
-
-		##### end of decoder training
 
 		# ------------------------------------------------------------------
 		# Compute TD targets using pre-computed encodings

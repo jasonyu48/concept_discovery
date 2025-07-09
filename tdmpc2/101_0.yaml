@@ -34,8 +34,8 @@ discount_denom: 5
 discount_min: 0.95
 discount_max: 0.995
 buffer_size: 100_000
-q_sample_ratio: 1.0  # Ratio of buffer data visible to Q-function and collapse prevention training (0.0-1.0)
-exp_name: 51_bin
+q_sample_ratio: 0.0  # Ratio of buffer data visible to Q-function and collapse prevention training (0.0-1.0)
+exp_name: 101_bin_0mask
 data_dir: ???
 JEPA_sg: false
 grad_from_Q: true
@@ -46,7 +46,7 @@ grad_from_policy: false
 compile: false
 save_video: false
 save_agent: true
-seed: 2021
+seed: 2023
 monitor_freq: 10_000
 dim_monitor_steps: 100_000
 full_rank: false
@@ -78,7 +78,7 @@ log_std_max: 2
 entropy_coef: 1e-4
 
 # critic
-num_bins: 51
+num_bins: 101
 vmin: -10
 vmax: +10
 
