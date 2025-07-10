@@ -21,13 +21,35 @@ import argparse
 import json
 import math
 import os
+from types import SimpleNamespace
 from typing import Any, Dict, List, Optional
-import csv
+# csv no longer needed (removed legacy DecoderLoss.txt support)
+
+# Optional heavy deps (torch & tdmpc2); imported lazily when --recalculate_decoder_loss is set
+import torch
+import torch.nn.functional as F
+from common.world_model import WorldModel
+from common.layers import api_model_conversion
+from envs import make_env
+from omegaconf import OmegaConf
 
 import matplotlib.pyplot as plt
 import yaml
 
-RESULTS_PATH = "/home/jyu197/tdmpc2/tdmpc2/logs/cheetah-run"
+
+# --------------------------------------------------------------------------------------
+# Helper: recursively convert a (nested) dict to a SimpleNamespace for dot access
+# --------------------------------------------------------------------------------------
+
+
+def _dict_to_ns(d: Dict[str, Any]) -> SimpleNamespace:  # type: ignore
+    ns = SimpleNamespace()
+    for k, v in d.items():
+        if isinstance(v, dict):
+            setattr(ns, k, _dict_to_ns(v))
+        else:
+            setattr(ns, k, v)
+    return ns
 
 
 def _last_not_nan(values: List[Any]) -> Optional[float]:
@@ -42,42 +64,95 @@ def _last_not_nan(values: List[Any]) -> Optional[float]:
     return None
 
 
-def _decoder_loss_avg(exp_path: str) -> Optional[float]:
-    """Return the average of the last 10 (or fewer) decoder loss values.
+# (legacy DecoderLoss.txt reader removed)
 
-    `DecoderLoss.txt` is expected to be a CSV-like file with two columns
-    (e.g. "step,loss") and possibly a header row. We parse the last column as
-    the loss value while gracefully skipping non-numeric rows (headers)."""
 
-    loss_path = os.path.join(exp_path, "DecoderLoss.txt")
-    if not os.path.isfile(loss_path):
+# --------------------------------------------------------------------------------------
+# Re-calculate decoder loss by loading model & observations (expensive, CPU only)
+# --------------------------------------------------------------------------------------
+
+
+def _recalculate_decoder_loss(exp_path: str, cfg_path: str, task: str) -> Optional[float]:
+    """Load the trained model and compute decoder reconstruction loss on stored observations.
+
+    Config is re-loaded with OmegaConf (same as num_lipschitz_sample) to retain correct
+    datatypes such as tuples, lists, etc.
+    """
+
+    if torch is None or WorldModel is None:
+        print("[WARN] PyTorch / tdmpc2 not available – cannot recalculate decoder loss.")
         return None
 
-    values: List[float] = []
+    # Resolve model checkpoint – allow both final.pt & latest_checkpoint.pt
+    ckpt_candidates = [
+        os.path.join(exp_path, "models", "final.pt"),
+        os.path.join(exp_path, "models", "latest_checkpoint.pt"),
+    ]
+    ckpt_path = next((p for p in ckpt_candidates if os.path.isfile(p)), None)
+    if ckpt_path is None:
+        print(f"[WARN] No checkpoint found in {exp_path}/models/")
+        return None
+
+    # Reload cfg with OmegaConf to keep complex types intact
     try:
-        with open(loss_path, "r") as f:
-            reader = csv.reader(f)
-            for row in reader:
-                if not row:
-                    continue
-                try:
-                    val = float(row[-1])  # use last column (loss)
-                    values.append(val)
-                except ValueError:
-                    # Likely a header row like ["step", "loss"] – skip
-                    continue
+        cfg = OmegaConf.load(cfg_path)
     except Exception as e:
-        print(f"[WARN] Failed to read {loss_path}: {e}")
+        print(f"[WARN] OmegaConf failed to load {cfg_path}: {e}")
         return None
 
-    if not values:
+    # Minimal patches needed for evaluation
+    cfg.enable_decoder = True
+    cfg.device = "cuda" if torch.cuda.is_available() else "cpu"
+    cfg.multitask = False
+    cfg.task_dim = 0
+    env = make_env(cfg)
+
+    device = cfg.device
+
+    try:
+        model = WorldModel(cfg).to(device).eval()
+        state = torch.load(ckpt_path, map_location=device)
+        state = state["model"] if "model" in state else state
+        state = api_model_conversion(model.state_dict(), state)
+        model.load_state_dict(state, strict=False)
+    except Exception as e:
+        print(f"[WARN] Failed to load model from {ckpt_path}: {e}")
         return None
 
-    tail = values[-10:]
-    return sum(tail) / len(tail)
+    # Observation tensor path – override with standard location based on task
+    eval_obs_path = f"/scratch/tshu2/jyu197/obs_data/{task}/obs/observations.pt"
+    if not os.path.isfile(eval_obs_path):
+        print(f"[WARN] observation file not found: {eval_obs_path}")
+        return None
+
+    try:
+        obs_tensor = torch.load(eval_obs_path, map_location="cpu").float()
+    except Exception as e:
+        print(f"[WARN] Failed to load observations from {eval_obs_path}: {e}")
+        return None
+
+    batch_size = 4096
+    total_loss = 0.0
+    total_samples = 0
+
+    with torch.no_grad():
+        for start in range(0, obs_tensor.shape[0], batch_size):
+            batch = obs_tensor[start:start + batch_size].to(device, non_blocking=True)
+            z = model.encode(batch, task=None)
+            recon = model._decoder(z)
+            recon = recon.reshape_as(batch)
+            target = (batch / 255.0 - 0.5) * 2.0
+            batch_loss = F.mse_loss(recon, target, reduction="mean").item()
+            total_loss += batch_loss * batch.size(0)
+            total_samples += batch.size(0)
+
+    if total_samples == 0:
+        return None
+
+    return float(total_loss / total_samples)
 
 
-def _load_experiment(exp_path: str) -> Optional[Dict[str, Any]]:
+def _load_experiment(exp_path: str, task: str, recalc: bool = False) -> Optional[Dict[str, Any]]:
     """Load config and monitoring data for a single experiment directory."""
     cfg_path = os.path.join(exp_path, ".hydra", "config.yaml")
     monitor_path = os.path.join(exp_path, "encoding_monitor", "monitoring_data.json")
@@ -104,7 +179,22 @@ def _load_experiment(exp_path: str) -> Optional[Dict[str, Any]]:
     est_dim_avg = _last_not_nan(monitor.get("est_dim_avg", []))
     est_dim_p_avg = _last_not_nan(monitor.get("est_dim_p_avg", []))
     rankme = _last_not_nan(monitor.get("rankme", []))
-    dec_loss_avg = _decoder_loss_avg(exp_path)
+    # Decoder loss handling
+    if recalc:
+        dec_loss = _recalculate_decoder_loss(exp_path, cfg_path, task)
+        # Persist into json for future quick access
+        if dec_loss is not None:
+            monitor["decoder_loss_recalc"] = dec_loss
+            try:
+                with open(monitor_path, "w") as fw:
+                    json.dump(monitor, fw, indent=2)
+            except Exception as e:
+                print(f"[WARN] Could not update {monitor_path}: {e}")
+    else:
+        # Prefer value stored by monitor JSON
+        dec_loss = _last_not_nan(monitor.get("decoder_loss", []))
+        if dec_loss is None:
+            dec_loss = monitor.get("decoder_loss_recalc")
 
     # Need rankme and at least one of the est_dim metrics
     if rankme is None or (est_dim_avg is None and est_dim_p_avg is None):
@@ -117,11 +207,11 @@ def _load_experiment(exp_path: str) -> Optional[Dict[str, Any]]:
         "est_dim_avg": est_dim_avg,
         "est_dim_p_avg": est_dim_p_avg,
         "rankme": rankme,
-        "decoder_loss_avg": dec_loss_avg,
+        "decoder_loss": dec_loss,
     }
 
 
-def plot_rankme(seed: str) -> None:
+def plot_rankme(seed: str, task: str, recalc: bool = False) -> None:
     """Generate two plots: est_dim_avg vs rankme and est_dim_p_avg vs rankme."""
     seed_dir = os.path.join(RESULTS_PATH, str(seed))
     if not os.path.isdir(seed_dir):
@@ -138,7 +228,7 @@ def plot_rankme(seed: str) -> None:
         if not os.path.isdir(exp_path):
             continue
 
-        data = _load_experiment(exp_path)
+        data = _load_experiment(exp_path, task, recalc=recalc)
         if data is None:
             continue
 
@@ -164,7 +254,7 @@ def plot_rankme(seed: str) -> None:
         plt.title(f"Encoding metrics (est_dim_avg vs rankme) for seed {seed}")
         plt.grid(True, linestyle="--", alpha=0.5)
         plt.tight_layout()
-        out_file = os.path.join(seed_dir, f"est_dimavg_vs_rankme_seed_{seed}.png")
+        out_file = os.path.join(seed_dir, f"est_dim_avg_vs_rankme_seed_{seed}.png")
         plt.savefig(out_file, dpi=150)
         print(f"Plot saved to {out_file}")
 
@@ -189,7 +279,7 @@ def plot_rankme(seed: str) -> None:
 # -----------------------------------------------------------------------------
 
 
-def plot_decoder_loss(seed: str) -> None:
+def plot_decoder_loss(seed: str, task: str, recalc: bool = False) -> None:
     """Plot decoder loss vs relevant x-axis depending on seed (2021 or 2022)."""
     seed_dir = os.path.join(RESULTS_PATH, str(seed))
     if not os.path.isdir(seed_dir):
@@ -204,12 +294,12 @@ def plot_decoder_loss(seed: str) -> None:
         if not os.path.isdir(exp_path):
             continue
 
-        data = _load_experiment(exp_path)
+        data = _load_experiment(exp_path, task, recalc=recalc)
         if data is None:
             continue
 
-        loss_avg = data.get("decoder_loss_avg")
-        if loss_avg is None:
+        loss_val = data.get("decoder_loss")
+        if loss_val is None:
             continue
 
         if seed == "2021":
@@ -230,7 +320,7 @@ def plot_decoder_loss(seed: str) -> None:
             continue
 
         xs.append(x_val)
-        ys.append(loss_avg)
+        ys.append(loss_val)
         labels.append(exp_name)
 
     if not xs:
@@ -244,7 +334,7 @@ def plot_decoder_loss(seed: str) -> None:
         plt.annotate(lbl, (x, y), textcoords="offset points", xytext=(5, 3), fontsize=8)
 
     plt.xlabel(x_label)
-    plt.ylabel("Average decoder loss (last 10)")
+    plt.ylabel("Decoder loss (MSE)")
     plt.title(f"Decoder loss vs {x_label} for seed {seed}")
     plt.grid(True, linestyle="--", alpha=0.5)
     plt.tight_layout()
@@ -257,8 +347,14 @@ def plot_decoder_loss(seed: str) -> None:
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Plot encoding and decoder metrics for a seed's experiments.")
-    parser.add_argument("--seed", default=2021, help="Seed folder name (e.g., 0 or 1)")
+    parser.add_argument("--seed", default=2021, help="Seed folder name")
+    parser.add_argument("--task", default="cheetah-run", help="Task name (determines results and observation paths)")
+    parser.add_argument("--recalculate_decoder_loss", default='False', help="Recompute decoder loss using saved model instead of reading from monitoring data.")
     args = parser.parse_args()
 
-    plot_rankme(args.seed)
-    plot_decoder_loss(str(args.seed)) 
+    # Set global RESULTS_PATH based on task
+    global RESULTS_PATH  # type: ignore
+    RESULTS_PATH = f"/home/jyu197/tdmpc2/tdmpc2/logs/{args.task}"
+
+    plot_rankme(str(args.seed), task=args.task, recalc=args.recalculate_decoder_loss == 'True')
+    plot_decoder_loss(str(args.seed), task=args.task, recalc=args.recalculate_decoder_loss == 'True') 
