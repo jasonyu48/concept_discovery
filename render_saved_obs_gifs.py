@@ -37,12 +37,10 @@ def save_gifs_from_observations(
     output_dir: Path | None = None,
     max_gifs: int = 5,
 ) -> None:
-    """Load observations tensor from *obs_file* and save GIFs.
+    """Load observations tensor from *obs_file* and save GIFs or images.
 
-    Each observation may contain multiple stacked frames along the channel
-    dimension (e.g. 9 channels = 3 RGB frames). A GIF is generated per sampled
-    observation that visualises all of its internal frames in chronological
-    order.
+    For 9-channel observations (3 RGB frames stacked), generates animated GIFs.
+    For 3-channel observations (single RGB frame), saves individual PNG images.
     """
 
     obs_file = Path(obs_file)
@@ -61,9 +59,17 @@ def save_gifs_from_observations(
     # Bring to numpy
     obs_np = obs.numpy()
 
-    # Simple validation: expect (N, 9, 64, 64) format
-    if obs_np.ndim != 4 or obs_np.shape[1:] != (9, 64, 64):
-        raise ValueError(f"Expected shape (N, 9, 64, 64), got {obs_np.shape}")
+    # Validation: expect either (N, 9, 64, 64) or (N, 3, 64, 64) format
+    if obs_np.ndim != 4 or obs_np.shape[-2:] != (64, 64):
+        raise ValueError(f"Expected shape (N, C, 64, 64) where C=3 or 9, got {obs_np.shape}")
+    
+    channels = obs_np.shape[1]
+    if channels not in [3, 9]:
+        raise ValueError(f"Expected 3 or 9 channels, got {channels}")
+    
+    is_stacked = (channels == 9)
+    file_type = "GIF" if is_stacked else "PNG"
+    print(f"   Detected {channels}-channel observations → will save {file_type}s")
 
     total_obs = obs_np.shape[0]
     print(f"   Total observations available: {total_obs:,}")
@@ -81,35 +87,51 @@ def save_gifs_from_observations(
         if obs_idx >= total_obs:
             break
 
-        obs_chw = obs_np[obs_idx]  # (9, 64, 64)
+        obs_chw = obs_np[obs_idx]  # (C, 64, 64)
         
-        # Split into 3 RGB frames: channels 0-2, 3-5, 6-8
-        gif_frames = []
-        for f in range(3):
-            frame_chw = obs_chw[f * 3 : (f + 1) * 3]  # (3, 64, 64)
-            frame_hwc = np.transpose(frame_chw, (1, 2, 0))  # (64, 64, 3)
+        if is_stacked:
+            # 9-channel: Split into 3 RGB frames and create GIF
+            gif_frames = []
+            for f in range(3):
+                frame_chw = obs_chw[f * 3 : (f + 1) * 3]  # (3, 64, 64)
+                frame_hwc = np.transpose(frame_chw, (1, 2, 0))  # (64, 64, 3)
+                
+                # Resize to make GIF larger (3x larger = 192x192)
+                frame_pil = Image.fromarray(_to_uint8(frame_hwc))
+                frame_large = frame_pil.resize((192, 192), Image.NEAREST)  # 3x larger, pixelated style
+                gif_frames.append(np.array(frame_large))
+
+            output_path = output_dir / f"saved_obs_{obs_idx:05d}.gif"
+            try:
+                imageio.mimsave(output_path, gif_frames, duration=0.5, loop=0)
+                saved += 1
+                print(f"   ✅ Saved {output_path}")
+            except Exception as e:
+                print(f"   ⚠️ Failed to save GIF {output_path}: {e}")
+        else:
+            # 3-channel: Single RGB frame, save as PNG
+            frame_hwc = np.transpose(obs_chw, (1, 2, 0))  # (64, 64, 3)
             
-            # Resize to make GIF larger (3x larger = 192x192)
+            # Resize to make image larger (3x larger = 192x192)
             frame_pil = Image.fromarray(_to_uint8(frame_hwc))
             frame_large = frame_pil.resize((192, 192), Image.NEAREST)  # 3x larger, pixelated style
-            gif_frames.append(np.array(frame_large))
+            
+            output_path = output_dir / f"saved_obs_{obs_idx:05d}.png"
+            try:
+                frame_large.save(output_path)
+                saved += 1
+                print(f"   ✅ Saved {output_path}")
+            except Exception as e:
+                print(f"   ⚠️ Failed to save PNG {output_path}: {e}")
 
-        gif_path = output_dir / f"saved_obs_{obs_idx:05d}.gif"
-        try:
-            imageio.mimsave(gif_path, gif_frames, duration=0.5, loop=0)
-            saved += 1
-            print(f"   ✅ Saved {gif_path}")
-        except Exception as e:
-            print(f"   ⚠️ Failed to save GIF {gif_path}: {e}")
-
-    print(f"Done. Saved {saved} GIFs to {output_dir}")
+    print(f"Done. Saved {saved} {file_type.lower()}s to {output_dir}")
 
 
 def main():
     parser = argparse.ArgumentParser(description="Render GIFs from saved observations")
-    parser.add_argument("--obs-file", type=str, default= "/scratch/tshu2/jyu197/obs_data/cheetah-run/obs/observations.pt", help="Path to observations.pt file")
-    parser.add_argument("--output-dir", type=str, default="/scratch/tshu2/jyu197/obs_data/cheetah-run/obs", help="Directory to write GIFs")
-    parser.add_argument("--max-gifs", type=int, default=10, help="Number of GIFs to generate")
+    parser.add_argument("--obs-file", type=str, default= "/scratch/tshu2/jyu197/obs_data/walker-walk/obs/observations.pt", help="Path to observations.pt file")
+    parser.add_argument("--output-dir", type=str, default="/scratch/tshu2/jyu197/obs_data/walker-walk/obs", help="Directory to write GIFs")
+    parser.add_argument("--max-gifs", type=int, default=10, help="Number of GIFs/images to generate")
     args = parser.parse_args()
 
     save_gifs_from_observations(

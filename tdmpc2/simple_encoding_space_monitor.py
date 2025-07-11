@@ -51,7 +51,7 @@ class SimpleEncodingSpaceMonitor:
         self.monitor_batch_size = getattr(self.cfg, 'monitor_batch_size', 1024)
         
         # Monitoring configuration
-        self.num_seed_obs = 64  # Number of diverse seed observations
+        self.num_seed_obs = 128  # Number of diverse seed observations
         self.monitor_freq = self.cfg.get('monitor_freq', 2000)  # Monitor every N steps
         # Dimension monitoring frequency & sample size
         self.dim_monitor_steps = getattr(self.cfg, 'dim_monitor_steps', 5000)
@@ -126,7 +126,10 @@ class SimpleEncodingSpaceMonitor:
         self.baseline_observations = None
         self.baseline_encodings = None
         self.baseline_labels = None  # ground-truth object counts when available
-        self._sample_baseline_observations()
+        if hasattr(self.env, 'count'):
+            self._generate_baseline_observations_fallback()
+        else:
+            self._sample_baseline_observations()
         
         print(f"🔍 SimpleEncodingSpaceMonitor initialized:")
         print(f"   - Monitoring frequency: every {self.monitor_freq} steps")
