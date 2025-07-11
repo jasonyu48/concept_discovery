@@ -108,6 +108,11 @@ class SimpleEncodingSpaceMonitor:
         self.enable_decoder_loss = getattr(self.cfg, 'enable_decoder', False) and self.cfg.obs == 'rgb'
         if self.enable_decoder_loss:
             self.monitoring_data['decoder_loss'] = []
+
+        # Clustering accuracy (optional, only for counting envs where labels are known)
+        self.enable_cluster_acc = getattr(self.cfg, 'monitor_cluster_acc', True)
+        if self.enable_cluster_acc:
+            self.monitoring_data['cluster_acc'] = []
         
         # -------------------------------------------------------------
         # RankMe setup (needed for baseline observation sampling)
@@ -120,6 +125,7 @@ class SimpleEncodingSpaceMonitor:
         # Sample baseline observations from saved data
         self.baseline_observations = None
         self.baseline_encodings = None
+        self.baseline_labels = None  # ground-truth object counts when available
         self._sample_baseline_observations()
         
         print(f"🔍 SimpleEncodingSpaceMonitor initialized:")
@@ -232,6 +238,11 @@ class SimpleEncodingSpaceMonitor:
             
             sampled_obs = obs_tensor[indices].to(self.device).float()
             self.baseline_observations = sampled_obs
+            # Try to infer labels from env if it has 'count' attribute
+            if hasattr(self.env, 'count'):
+                # We assume env.count holds the current count at sampling time
+                # However, saved observations lack labels; so default to None.
+                self.baseline_labels = None
             
             print(f"✅ Sampled {len(indices)} baseline observations")
             print(f"   Final shape: {self.baseline_observations.shape}")
@@ -252,6 +263,7 @@ class SimpleEncodingSpaceMonitor:
         print("🌱 Generating baseline observations from environment (fallback)...")
         
         observations = []
+        labels = []
         
         with torch.no_grad():
             for i, seed in enumerate(self.seeds):
@@ -273,6 +285,9 @@ class SimpleEncodingSpaceMonitor:
                         obs, _, _, _ = self.env.step(action)
                     
                     observations.append(obs)
+                    # Record ground truth count if env provides attribute
+                    if hasattr(self.env, 'count'):
+                        labels.append(int(self.env.count))
                         
                 except Exception as e:
                     print(f"⚠️ Warning: Failed to generate observation with seed {seed}: {e}")
@@ -297,6 +312,8 @@ class SimpleEncodingSpaceMonitor:
             raise RuntimeError("No valid observations generated!")
             
         self.baseline_observations = torch.stack(tensor_observations)
+        if labels:
+            self.baseline_labels = torch.tensor(labels)
         print(f"✅ Generated {len(observations)} fallback baseline observations")
         print(f"   Final shape: {self.baseline_observations.shape}")
         
@@ -435,7 +452,20 @@ class SimpleEncodingSpaceMonitor:
             metrics['encoding_space_size'] = space_size
             self.monitoring_data['encoding_space_size'].append(space_size)
             print(f"   Encoding space size: {space_size:.6f}")
-            
+
+        # Clustering accuracy metric (requires labels)
+        if self.enable_cluster_acc and self.baseline_labels is not None:
+            try:
+                acc = self._compute_cluster_accuracy(self.baseline_encodings, self.baseline_labels)
+                metrics['cluster_acc'] = acc
+                self.monitoring_data['cluster_acc'].append(acc)
+                print(f"   Cluster accuracy: {acc*100:.2f}%")
+            except Exception as e:
+                print(f"⚠️ Failed to compute cluster accuracy: {e}")
+                self.monitoring_data['cluster_acc'].append(None)
+        elif self.enable_cluster_acc:
+            self.monitoring_data['cluster_acc'].append(None)
+        
         if self.enable_jacobian_rank:
             min_rank = self.compute_min_jacobian_rank(self.baseline_observations)
             metrics['min_jacobian_rank'] = float(min_rank)
@@ -493,6 +523,26 @@ class SimpleEncodingSpaceMonitor:
         self.encoder.train()
 
         return metrics
+
+    # -------------------------------------------------------------
+    # Helper: cluster accuracy for known labels
+    # -------------------------------------------------------------
+    def _compute_cluster_accuracy(self, encodings: torch.Tensor, labels: torch.Tensor) -> float:
+        """Compute simple nearest-centroid classification accuracy."""
+        # Move to CPU for numpy ops
+        enc = encodings.detach().cpu().numpy()
+        labs = labels.detach().cpu().numpy()
+        unique_labels = np.unique(labs)
+        # Compute centroid per label
+        centroids = {l: enc[labs == l].mean(axis=0) for l in unique_labels}
+        # Predict label by nearest centroid
+        pred = []
+        for vec in enc:
+            dists = {l: np.linalg.norm(vec - c) for l, c in centroids.items()}
+            pred.append(min(dists, key=dists.get))
+        pred = np.array(pred)
+        acc = (pred == labs).mean()
+        return float(acc)
     
     def save_monitoring_data(self):
         """Save monitoring data"""

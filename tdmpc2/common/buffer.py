@@ -230,7 +230,7 @@ class Buffer():
 
 		# Pixel observations typically have at least 4 dims (T,B,C,H,W) or (T,C,H,W).
 		# We want to flatten the leading dims (time, batch) but keep (C,H,W).
-		if obs_cpu.shape[-3:] == (9, 64, 64):
+		if obs_cpu.shape[-3:] in [(9, 64, 64), (3, 64, 64)]:
 			obs_cpu = obs_cpu.reshape(-1, *obs_cpu.shape[-3:])  # (-1, C, H, W)
 		else:
 			raise ValueError(f"Unknown observation shape: {obs_cpu.shape}")
