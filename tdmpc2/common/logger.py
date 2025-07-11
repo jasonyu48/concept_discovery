@@ -114,6 +114,9 @@ class Logger:
 		self._group = cfg_to_group(cfg)
 		self._seed = cfg.seed
 		self._eval = []
+		# Control training episode print frequency
+		self._train_print_freq = getattr(cfg, 'train_print_freq', 100)  # default: print every 100 episodes
+		self._episode_count = 0
 		print_run(cfg)
 		self.project = cfg.get("wandb_project", "none")
 		self.entity = cfg.get("wandb_entity", "none")
@@ -238,4 +241,11 @@ class Logger:
 			pd.DataFrame(np.array(self._eval)).to_csv(
 				self._log_dir / "eval.csv", header=keys, index=None
 			)
-		self._print(d, category)
+		if category == "train":
+			self._episode_count += 1
+			# Only print training episodes every N episodes
+			if self._episode_count % self._train_print_freq == 0:
+				self._print(d, category)
+		else:
+			# Always print eval and pretrain logs
+			self._print(d, category)
