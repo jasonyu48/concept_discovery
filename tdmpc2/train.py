@@ -23,7 +23,7 @@ torch.backends.cudnn.benchmark = True
 torch.set_float32_matmul_precision('high')
 
 
-@hydra.main(config_name='tdmpc2_no_sg', config_path='.', version_base=None)
+@hydra.main(config_name='concept_discovery', config_path='.', version_base=None)
 def train(cfg: dict):
 	"""
 	Script for training single-task / multi-task TD-MPC2 agents.
