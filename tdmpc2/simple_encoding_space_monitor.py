@@ -959,9 +959,18 @@ class SimpleEncodingSpaceMonitor:
         # -------------------------------------------------
         # 5b. Lipschitz constant estimation (subset of z)
         # -------------------------------------------------
-        K_est = self._estimate_lipschitz(z)
-        self.monitoring_data['lipschitz_K'].append(K_est)
-        print(f"🧮 Estimated Lipschitz Constant: {K_est:.4f}")
+        if self.cfg.num_q == 1:
+            lipschitz_supported = True
+        else:
+            lipschitz_supported = False
+        if lipschitz_supported:
+            K_est = self._estimate_lipschitz(z)
+            self.monitoring_data['lipschitz_K'].append(K_est)
+            print(f"🧮 Estimated Lipschitz Constant: {K_est:.4f}")
+        else:
+            K_est = float('nan')
+            self.monitoring_data['lipschitz_K'].append(K_est)
+            print("🧮 Lipschitz constant estimation not supported for multi-Q model")
 
         # -------------------------------------------------
         # 5c. Dimension estimates based on P-space distances & Lipschitz K
@@ -970,11 +979,11 @@ class SimpleEncodingSpaceMonitor:
         est_dim_p_avg = est_dim_p_min = float(-114514)
         try:
             est_dim_p_avg = float(np.log(N_vis) / np.log(1 + 2 * R * K_est / (avg_dis_p + eps))) if avg_dis_p > eps else float('nan')
-        except ZeroDivisionError:
+        except:
             est_dim_p_avg = float('nan')
         try:
             est_dim_p_min = float(np.log(N_vis) / np.log(1 + 2 * R * K_est / (min_dis_p + eps))) if min_dis_p > eps else float('nan')
-        except ZeroDivisionError:
+        except:
             est_dim_p_min = float('nan')
 
         # -------------------------------------------------
