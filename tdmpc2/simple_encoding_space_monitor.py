@@ -179,6 +179,20 @@ class SimpleEncodingSpaceMonitor:
                 print(f"⚠️ Failed to compute initial decoder evaluation loss: {e}")
                 self.monitoring_data['decoder_loss'].append(None)
         
+        # Initial cluster accuracy (if labels are available)
+        if self.enable_cluster_acc:
+            if self.baseline_labels is not None:
+                try:
+                    initial_cluster_acc = self._compute_cluster_accuracy(self.baseline_encodings, self.baseline_labels)
+                    print(f"🎯 Initial cluster accuracy: {initial_cluster_acc*100:.2f}%")
+                    self.monitoring_data['cluster_acc'].append(initial_cluster_acc)
+                except Exception as e:
+                    print(f"⚠️ Failed to compute initial cluster accuracy: {e}")
+                    self.monitoring_data['cluster_acc'].append(None)
+            else:
+                print("🎯 Initial cluster accuracy: N/A (no labels available)")
+                self.monitoring_data['cluster_acc'].append(None)
+        
         # --- Collapse prevention: measure initial random function magnitude ---
         if getattr(self.cfg, 'collapse_prevention', False) and hasattr(self.agent.model, '_random_fn') and self.agent.model._random_fn is not None:
             with torch.no_grad():

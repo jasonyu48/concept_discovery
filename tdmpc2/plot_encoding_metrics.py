@@ -210,69 +210,87 @@ def _load_experiment(exp_path: str, task: str, recalc: bool = False) -> Optional
         "decoder_loss": dec_loss,
     }
 
+# ------------------------------ NEW: steps / cluster_acc helpers ------------------------------
 
-def plot_rankme(seed: str, task: str, recalc: bool = False) -> None:
-    """Generate two plots: est_dim_avg vs rankme and est_dim_p_avg vs rankme."""
+def _load_steps_and_cluster_acc(exp_path: str) -> Optional[Dict[str, List[float]]]:
+    """Load the full *steps* and *cluster_acc* lists from monitoring_data.json.
+
+    Returns None if the file or the required fields are missing / malformed.
+    """
+    monitor_path = os.path.join(exp_path, "encoding_monitor", "monitoring_data.json")
+    if not os.path.isfile(monitor_path):
+        return None
+
+    try:
+        with open(monitor_path, "r") as f:
+            monitor = json.load(f)
+    except Exception as e:
+        print(f"[WARN] Failed to read {monitor_path}: {e}")
+        return None
+
+    steps = monitor.get("steps")
+    cluster_acc = monitor.get("cluster_acc")
+
+    # Basic validation: both should be lists
+    if not isinstance(steps, list) or not isinstance(cluster_acc, list):
+        return None
+    
+    # Handle case where cluster_acc has one fewer value than steps
+    # (older versions: cluster_acc starts from step 3000, not 0)
+    # (newer versions: cluster_acc includes step 0)
+    if len(cluster_acc) == len(steps) - 1:
+        # Use steps[1:] to match cluster_acc length (older data)
+        aligned_steps = steps[1:]
+    elif len(cluster_acc) == len(steps):
+        # Equal length case (newer data with step 0 included)
+        aligned_steps = steps
+    else:
+        # Unexpected length mismatch
+        print(f"[WARN] Length mismatch in {monitor_path}: steps={len(steps)}, cluster_acc={len(cluster_acc)}")
+        return None
+
+    return {"steps": aligned_steps, "cluster_acc": cluster_acc}
+
+
+def plot_cluster_acc(seed: str, task: str) -> None:
+    """Plot *steps* vs *cluster_acc* for every experiment in the given seed directory."""
     seed_dir = os.path.join(RESULTS_PATH, str(seed))
     if not os.path.isdir(seed_dir):
         raise FileNotFoundError(f"Seed directory not found: {seed_dir}")
 
-    xs_avg: List[float] = []
-    xs_p: List[float] = []
-    ys: List[float] = []
-    labels: List[str] = []
+    plt.figure(figsize=(6, 4))
+    any_data = False
 
-    # Iterate over experiment subdirectories
     for exp_name in sorted(os.listdir(seed_dir)):
         exp_path = os.path.join(seed_dir, exp_name)
         if not os.path.isdir(exp_path):
             continue
 
-        data = _load_experiment(exp_path, task, recalc=recalc)
+        data = _load_steps_and_cluster_acc(exp_path)
         if data is None:
             continue
 
-        rankme = data["rankme"]
-        ys.append(rankme)
-        labels.append(exp_name)
+        steps = data["steps"]
+        acc = data["cluster_acc"]
 
-        xs_avg.append(data.get("est_dim_avg"))
-        xs_p.append(data.get("est_dim_p_avg"))
+        # Plot all points for this experiment
+        plt.plot(steps, acc, linestyle="-", label=exp_name, linewidth=1)
+        any_data = True
 
-    if not ys:
-        print(f"No valid encoding data found in {seed_dir}.")
+    if not any_data:
+        print(f"No steps/cluster_acc data found in {seed_dir}.")
         return
 
-    # Plot est_dim_avg vs rankme if available
-    if any(x is not None for x in xs_avg):
-        plt.figure(figsize=(6, 4))
-        plt.scatter(xs_avg, ys, c="tab:blue")
-        for x, y, lbl in zip(xs_avg, ys, labels):
-            plt.annotate(lbl, (x, y), textcoords="offset points", xytext=(5, 3), fontsize=8)
-        plt.xlabel("est_dim_avg")
-        plt.ylabel("rankme")
-        plt.title(f"Encoding metrics (est_dim_avg vs rankme) for seed {seed}")
-        plt.grid(True, linestyle="--", alpha=0.5)
-        plt.tight_layout()
-        out_file = os.path.join(seed_dir, f"est_dim_avg_vs_rankme_seed_{seed}.png")
-        plt.savefig(out_file, dpi=150)
-        print(f"Plot saved to {out_file}")
+    plt.xlabel("Steps")
+    plt.ylabel("Cluster Accuracy")
+    plt.title(f"Cluster Accuracy vs Steps for seed {seed}")
+    plt.grid(True, linestyle="--", alpha=0.5)
+    plt.legend(fontsize=8)
+    plt.tight_layout()
 
-    # Plot est_dim_p_avg vs rankme if available
-    if any(x is not None for x in xs_p):
-        plt.figure(figsize=(6, 4))
-        plt.scatter(xs_p, ys, c="tab:green")
-        for x, y, lbl in zip(xs_p, ys, labels):
-            plt.annotate(lbl, (x, y), textcoords="offset points", xytext=(5, 3), fontsize=8)
-        plt.xlabel("equation13")
-        plt.ylabel("rankme")
-        plt.title(" ")
-        plt.grid(True, linestyle="--", alpha=0.5)
-        plt.tight_layout()
-        out_file = os.path.join(seed_dir, f"est_dim_p_avg_vs_rankme_seed_{seed}.png")
-        plt.savefig(out_file, dpi=150)
-        print(f"Plot saved to {out_file}")
-
+    out_file = os.path.join(seed_dir, f"steps_vs_cluster_acc_seed_{seed}.png")
+    plt.savefig(out_file, dpi=150)
+    print(f"Cluster accuracy plot saved to {out_file}")
 
 # -----------------------------------------------------------------------------
 # Decoder loss plots
@@ -345,16 +363,85 @@ def plot_decoder_loss(seed: str, task: str, recalc: bool = False) -> None:
     print(f"Decoder loss plot saved to {out_file}")
 
 
+# ------------------------------ restore plot_rankme ------------------------------
+
+def plot_rankme(seed: str, task: str, recalc: bool = False) -> None:
+    """Generate two plots: est_dim_avg vs rankme and est_dim_p_avg vs rankme."""
+    seed_dir = os.path.join(RESULTS_PATH, str(seed))
+    if not os.path.isdir(seed_dir):
+        raise FileNotFoundError(f"Seed directory not found: {seed_dir}")
+
+    xs_avg: List[float] = []
+    xs_p: List[float] = []
+    ys: List[float] = []
+    labels: List[str] = []
+
+    # Iterate over experiment subdirectories
+    for exp_name in sorted(os.listdir(seed_dir)):
+        exp_path = os.path.join(seed_dir, exp_name)
+        if not os.path.isdir(exp_path):
+            continue
+
+        data = _load_experiment(exp_path, task, recalc=recalc)
+        if data is None:
+            continue
+
+        rankme = data["rankme"]
+        ys.append(rankme)
+        labels.append(exp_name)
+
+        xs_avg.append(data.get("est_dim_avg"))
+        xs_p.append(data.get("est_dim_p_avg"))
+
+    if not ys:
+        print(f"No valid encoding data found in {seed_dir}.")
+        return
+
+    # Plot est_dim_avg vs rankme if available
+    if any(x is not None for x in xs_avg):
+        plt.figure(figsize=(6, 4))
+        plt.scatter(xs_avg, ys, c="tab:blue")
+        for x, y, lbl in zip(xs_avg, ys, labels):
+            plt.annotate(lbl, (x, y), textcoords="offset points", xytext=(5, 3), fontsize=8)
+        plt.xlabel("est_dim_avg")
+        plt.ylabel("rankme")
+        plt.title(f"Encoding metrics (est_dim_avg vs rankme) for seed {seed}")
+        plt.grid(True, linestyle="--", alpha=0.5)
+        plt.tight_layout()
+        out_file = os.path.join(seed_dir, f"est_dim_avg_vs_rankme_seed_{seed}.png")
+        plt.savefig(out_file, dpi=150)
+        print(f"Plot saved to {out_file}")
+
+    # Plot est_dim_p_avg vs rankme if available
+    if any(x is not None for x in xs_p):
+        plt.figure(figsize=(6, 4))
+        plt.scatter(xs_p, ys, c="tab:green")
+        for x, y, lbl in zip(xs_p, ys, labels):
+            plt.annotate(lbl, (x, y), textcoords="offset points", xytext=(5, 3), fontsize=8)
+        plt.xlabel("equation13")
+        plt.ylabel("rankme")
+        plt.title(" ")
+        plt.grid(True, linestyle="--", alpha=0.5)
+        plt.tight_layout()
+        out_file = os.path.join(seed_dir, f"est_dim_p_avg_vs_rankme_seed_{seed}.png")
+        plt.savefig(out_file, dpi=150)
+        print(f"Plot saved to {out_file}")
+
+# ------------------------------ end restore plot_rankme ------------------------------
+
+
 if __name__ == "__main__":
-    parser = argparse.ArgumentParser(description="Plot encoding and decoder metrics for a seed's experiments.")
+    parser = argparse.ArgumentParser(description="Plot encoding, decoder, and clustering metrics for a seed's experiments.")
     parser.add_argument("--seed", default=2021, help="Seed folder name")
-    parser.add_argument("--task", default="cheetah-run", help="Task name (determines results and observation paths)")
+    parser.add_argument("--task", default="counting3", help="Task name (determines results and observation paths)")
+    parser.add_argument("--results_root", default="/scratch/tshu2/jyu197/concept_discovery/tdmpc2/logs", help="Base directory that contains task subfolders")
     parser.add_argument("--recalculate_decoder_loss", default='False', help="Recompute decoder loss using saved model instead of reading from monitoring data.")
     args = parser.parse_args()
 
-    # Set global RESULTS_PATH based on task
+    # Set global RESULTS_PATH based on task and optional root override
     global RESULTS_PATH  # type: ignore
-    RESULTS_PATH = f"/home/jyu197/tdmpc2/tdmpc2/logs/{args.task}"
+    RESULTS_PATH = os.path.join(args.results_root, args.task)
 
-    plot_rankme(str(args.seed), task=args.task, recalc=args.recalculate_decoder_loss == 'True')
-    plot_decoder_loss(str(args.seed), task=args.task, recalc=args.recalculate_decoder_loss == 'True') 
+    # plot_rankme(str(args.seed), task=args.task, recalc=args.recalculate_decoder_loss == 'True')
+    plot_decoder_loss(str(args.seed), task=args.task, recalc=args.recalculate_decoder_loss == 'True')
+    plot_cluster_acc(str(args.seed), task=args.task) 
