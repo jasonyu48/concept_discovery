@@ -84,10 +84,35 @@ class WorldModel(nn.Module):
 			for i in range(len(cfg.tasks)):
 				self._action_masks[i, :cfg.action_dims[i]] = 1.
 		self._encoder = layers.enc(cfg)
-		if cfg.simnorm:
-			self._dynamics = layers.mlp(cfg.latent_dim + cfg.action_dim + cfg.task_dim, 2*[cfg.mlp_dim], cfg.latent_dim, act=layers.SimNorm(cfg))
+		# --- Transition / Dynamics model selection ---
+		dyn_arch = getattr(cfg, "dynamics_arch", "iresnet")  # default to iresnet
+		if dyn_arch == "iresnet":
+			C = getattr(cfg, "iresnet_C", 2.0)
+			simple_dyn = getattr(cfg, "simple_dynamics", False)
+			in_dim = cfg.latent_dim + cfg.action_dim + (cfg.task_dim if cfg.multitask else 0)
+			self._dynamics = layers.IResNetTransition(
+				in_dim=in_dim,
+				z_dim=cfg.latent_dim,
+				mlp_dims=cfg.mlp_dim,
+				C=C,
+				simple=simple_dyn,
+			)
+		elif dyn_arch == "mlp":
+			if cfg.simnorm:
+				self._dynamics = layers.mlp(
+					cfg.latent_dim + cfg.action_dim + cfg.task_dim,
+					2 * [cfg.mlp_dim],
+					cfg.latent_dim,
+					act=layers.SimNorm(cfg),
+				)
+			else:
+				self._dynamics = layers.mlp(
+					cfg.latent_dim + cfg.action_dim + cfg.task_dim,
+					2 * [cfg.mlp_dim],
+					cfg.latent_dim,
+				)
 		else:
-			self._dynamics = layers.mlp(cfg.latent_dim + cfg.action_dim + cfg.task_dim, 2*[cfg.mlp_dim], cfg.latent_dim)
+			raise ValueError(f"Unsupported dynamics_arch '{dyn_arch}'.")
 		self._reward = layers.mlp(cfg.latent_dim + cfg.action_dim + cfg.task_dim, 2*[cfg.mlp_dim], max(cfg.num_bins, 1))
 		self._termination = layers.mlp(cfg.latent_dim + cfg.task_dim, 2*[cfg.mlp_dim], 1) if cfg.episodic else None
 		if cfg.full_rank:
@@ -113,12 +138,36 @@ class WorldModel(nn.Module):
 		else:
 			self._collapse_pred = None
 			self._random_fn = None
+		
+		# Apply standard weight initialization to all modules
 		self.apply(init.weight_init)
+		
+		# Apply collapsed initialization to RGBMLPEncoder if requested
+		if getattr(cfg, "collapsed_encoder_init", False):
+			self._apply_collapsed_encoder_init()
+		
 		init.zero_([self._reward[-1].weight, self._Qs.params["2", "weight"]])
 
 		self.register_buffer("log_std_min", torch.tensor(cfg.log_std_min))
 		self.register_buffer("log_std_dif", torch.tensor(cfg.log_std_max) - self.log_std_min)
 		self.init()
+
+	def _apply_collapsed_encoder_init(self):
+		"""Apply collapsed initialization specifically to RGBMLPEncoder instances."""
+		from common.layers import RGBMLPEncoder
+		
+		for name, module in self.named_modules():
+			if isinstance(module, RGBMLPEncoder):
+				# Zero out all linear layer weights and biases
+				for mlp_module in module.mlp:
+					if isinstance(mlp_module, nn.Linear):
+						nn.init.normal_(mlp_module.weight, mean=0.0, std=1e-3)
+						nn.init.constant_(mlp_module.bias, 0.0)
+				
+				# Set final bias to 0.1 for non-trivial downstream logits
+				linear_layers = [m for m in module.mlp if isinstance(m, nn.Linear)]
+				if linear_layers:
+					nn.init.constant_(linear_layers[-1].bias, 0.1)
 
 	def init(self):
 		# Create params

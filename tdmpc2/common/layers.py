@@ -142,18 +142,53 @@ def conv(in_shape, num_channels, latent_dim, act=None):
 	
 	# Calculate flattened conv output size: num_channels * 4 * 4 for 64x64 input
 	conv_output_size = num_channels * 4 * 4
-	
+
+	# The conv stack outputs a fixed 512-D vector (for default num_channels=32).
+	# This is **independent** of cfg.latent_dim, therefore we explicitly assert
+	# that the configuration matches this architectural constant to avoid
+	# silent shape mismatches downstream.
+	assert latent_dim == conv_output_size, (
+		f"CNN encoder produces {conv_output_size}-D latents, but cfg.latent_dim="
+		f"{latent_dim}. Either set latent_dim={conv_output_size} or switch to a"
+		" different encoder_arch (e.g. 'vit' or 'mlp')."
+	)
+
 	layers = [
 		ShiftAug(), PixelPreprocess(),
 		nn.Conv2d(in_shape[0], num_channels, 7, stride=2), nn.ReLU(inplace=False),
 		nn.Conv2d(num_channels, num_channels, 5, stride=2), nn.ReLU(inplace=False),
 		nn.Conv2d(num_channels, num_channels, 3, stride=2), nn.ReLU(inplace=False),
 		nn.Conv2d(num_channels, num_channels, 3, stride=1), nn.Flatten(),
-		# nn.Linear(conv_output_size, latent_dim)  # Project to latent_dim
 	]
 	if act:
 		layers.append(act)
 	return nn.Sequential(*layers)
+
+
+# -----------------------------------------------------------------------------
+# New RGB MLP encoder (flattened pixels → latent)
+# -----------------------------------------------------------------------------
+
+
+class RGBMLPEncoder(nn.Module):
+	"""MLP encoder operating on flattened 64×64 RGB observations."""
+
+	def __init__(self, cfg):
+		super().__init__()
+		in_dim = cfg.obs_shape["rgb"][0] * 64 * 64  # C⋅H⋅W
+		# Build hidden layers following state-encoder convention
+		n_layers = max(cfg.num_enc_layers - 1, 1)
+		hidden_dims = [cfg.enc_dim] * n_layers
+		self.shift = ShiftAug()
+		self.pre = PixelPreprocess()
+		self.mlp = mlp(in_dim, hidden_dims, cfg.latent_dim)
+
+	def forward(self, x):
+		# x: (B, C, 64, 64)
+		x = self.shift(x.float())
+		x = self.pre(x)
+		x = x.flatten(1)
+		return self.mlp(x)
 
 
 class ViTEncoder(nn.Module):
@@ -235,11 +270,19 @@ def enc(cfg, out={}):
 				if cfg.simnorm:
 					vit_enc = nn.Sequential(vit_enc, SimNorm(cfg))
 				out[k] = vit_enc
-			else:  # default CNN encoder path
+			elif encoder_arch == 'mlp':
+				# New MLP encoder path
+				mlp_enc = RGBMLPEncoder(cfg)
+				if cfg.simnorm:
+					mlp_enc = nn.Sequential(mlp_enc, SimNorm(cfg))
+				out[k] = mlp_enc
+			elif encoder_arch == 'cnn':  # default CNN encoder path
 				if cfg.simnorm:
 					out[k] = conv(cfg.obs_shape[k], cfg.num_channels, cfg.latent_dim, act=SimNorm(cfg))
 				else:
 					out[k] = conv(cfg.obs_shape[k], cfg.num_channels, cfg.latent_dim)
+			else:
+				raise ValueError(f"Unsupported encoder_arch '{encoder_arch}'.")
 		else:
 			raise NotImplementedError(f"Encoder for observation type {k} not implemented.")
 	return nn.ModuleDict(out)
@@ -262,6 +305,15 @@ class CNNDecoder(nn.Module):
         self.h_dim = cfg.num_channels #32
         # This allows it to reconstruct the full frame stack (e.g., 9 channels).
         output_channels = cfg.obs_shape['rgb'][0]
+        expected_flat = self.h_dim * 4 * 4  # expected latent size (e.g. 512)
+
+        # If latent_dim differs, insert a projection layer so decoder can ingest
+        # any latent size without breaking the existing conv-transpose stack.
+        if cfg.latent_dim != expected_flat:
+            self.project = nn.Linear(cfg.latent_dim, expected_flat)
+        else:
+            self.project = nn.Identity()
+
         self.net = nn.Sequential(
                     nn.ConvTranspose2d(self.h_dim, self.h_dim,
                                        3, stride=1, padding=1),  nn.ReLU(),        # 4×4
@@ -278,9 +330,9 @@ class CNNDecoder(nn.Module):
     
     def forward(self, z):
         # z shape: (B, 32*4*4) = (B, 512)
-        B, D = z.shape
-        assert D == self.h_dim * 4 * 4, f"Expect {self.h_dim*4*4}, got {D}"
-        x = z.view(B, self.h_dim, 4, 4)
+        B, _ = z.shape
+        z_proj = self.project(z)
+        x = z_proj.view(B, self.h_dim, 4, 4)
         return self.net(x)
 
 # =====MLPDecoder ============================================
@@ -347,3 +399,90 @@ def api_model_conversion(target_state_dict, source_state_dict):
 	source_state_dict.update(new_state_dict)
 
 	return source_state_dict
+
+# === i-ResNet Transition Model (Lipschitz-controlled) ===
+# Inspired by https://arxiv.org/abs/1810.12933. Provides an invertible residual
+# dynamics model z' = z + g([z,a]) with spectral normalisation to guarantee
+# Lipschitz constant ≤ C.
+
+def SN(layer: nn.Module, coeff: float) -> nn.Module:
+    """Applies spectral normalization and rescales the *output* by ``coeff``.
+
+    PyTorch's ``spectral_norm`` constrains the **spectral norm** (largest
+    singular value) of the weight matrix to 1.  To achieve a minimum singular
+    value ≥ 1 / C (hence overall Lipschitz constant ≤ C) we simply multiply the
+    *weights* by ``coeff = 1 − 1/C``.  Rather than manipulating the parameters
+    directly we scale the *output* of the layer which is algebraically
+    equivalent and avoids interfering with PyTorch's parameterization.
+    """
+
+    base = torch.nn.utils.spectral_norm(layer)
+
+    class _SNScaled(nn.Module):
+        def __init__(self, mod: nn.Module, scale: float):
+            super().__init__()
+            self.mod = mod
+            self.scale = scale
+
+        def forward(self, x):  # noqa: D401
+            return self.mod(x) * self.scale
+
+        def extra_repr(self):  # noqa: D401
+            return f"scale={self.scale}"
+
+    return _SNScaled(base, coeff)
+
+
+class IResNetTransition(nn.Module):
+    """Invertible residual transition model with spectral-norm control.
+
+    We implement
+        z' = z + g([z, task_emb, a])
+    with g parameterised by a Spectral-Norm MLP whose hidden layer widths and
+    depth are determined by ``mlp_dims`` (taken from ``cfg.mlp_dim``).  When
+    ``cfg.mlp_dim`` is an ``int`` we create a **single** hidden layer of that
+    width; when it is a *list/tuple* we create one hidden layer per element.
+
+    The *Lipschitz* constant of g is bounded by ``coeff = 1 − 1/C`` where
+    ``C > 1`` is asserted, guaranteeing the desired contraction inequality
+    ‖z₁ − z₂‖ ≤ C‖z₁' − z₂'‖ for every action and task.
+    """
+
+    def __init__(self, in_dim: int, z_dim: int, mlp_dims, C: float = 2.0, simple: bool = False):
+        super().__init__()
+        assert C > 1.0, "Lipschitz constant C must be > 1"
+
+        coeff = 1.0 - 1.0 / C  # σ_min ≥ 1/C
+
+        if simple:
+            # Single spectral-norm linear layer
+            self.g = SN(nn.Linear(in_dim, z_dim), coeff)
+        else:
+            # Handle flexible mlp_dims specification (int or list)
+            if isinstance(mlp_dims, int):
+                hidden_dims = [mlp_dims]
+            else:
+                hidden_dims = list(mlp_dims)
+
+            dims = [in_dim] + hidden_dims + [z_dim]
+            layers_sn = []
+            for i in range(len(dims) - 1):
+                layers_sn.append(SN(nn.Linear(dims[i], dims[i + 1]), coeff))
+                if i < len(dims) - 2:  # no activation after final layer
+                    layers_sn.append(nn.LeakyReLU(0.1, inplace=True))
+
+            self.g = nn.Sequential(*layers_sn)
+        self.z_dim = z_dim
+
+    def forward(self, zcat: torch.Tensor) -> torch.Tensor:
+        """Expect *concatenated* input (z, task_emb?, a)."""
+        z = zcat[..., : self.z_dim]
+        return z + self.g(zcat)
+
+    def __repr__(self):
+        if isinstance(self.g, nn.Sequential):
+            # Count only linear layers within the sequential container.
+            n_layers = sum(isinstance(m, nn.Linear) for m in self.g)
+        else:
+            n_layers = 1  # simple linear case
+        return f"IResNetTransition(z_dim={self.z_dim}, layers={n_layers})"

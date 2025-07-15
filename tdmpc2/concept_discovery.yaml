@@ -13,12 +13,12 @@ eval_episodes: 10
 eval_freq: 3_000
 
 # training
-steps: 400_000
+steps: 1_200_000
 batch_size: 256
-reward_coef: 0.1
+reward_coef: 2
 value_coef: 0.1
 termination_coef: 1
-consistency_coef: 20
+consistency_coef: 2
 pi_coef: 0.11
 shrink_coef: 0.0
 collapse_prevention: false  # enable/disable random-function predictor mechanism
@@ -36,7 +36,7 @@ discount_min: 0.95
 discount_max: 0.995
 buffer_size: 100_000
 q_sample_ratio: 1.0  # Ratio of buffer data visible to Q-function and collapse prevention training (0.0-1.0)
-exp_name: concept_discovery_vit
+exp_name: concept_discovery_iresnet_mlp_simple_balanced_loss_long
 train_print_freq: 100  # print training episodes every 500 episodes instead of every episode
 data_dir: ???
 JEPA_sg: false
@@ -57,7 +57,7 @@ simnorm_dim: 8
 save_obs_for_rankme: false
 rankme_samples: 30_000
 enable_decoder: true
-encoder_arch: vit
+encoder_arch: mlp
 
 monitor_rankme: true
 monitor_eval_reward: true
@@ -88,11 +88,15 @@ vmax: +10
 
 # architecture
 model_size: ???
-num_enc_layers: 2
+num_enc_layers: 4
 enc_dim: 256
 num_channels: 32
 mlp_dim: 512
-latent_dim: 512
+latent_dim: 10
+dynamics_arch: iresnet  # use i-ResNet transition model by default
+iresnet_C: 2.0         # Lipschitz constant C for i-ResNet
+simple_dynamics: true  # linear g if true
+collapsed_encoder_init: false  # initialise RGB MLP encoder in collapsed mode
 task_dim: 96
 num_q: 1
 dropout: 0.01

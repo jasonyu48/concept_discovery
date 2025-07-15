@@ -145,7 +145,7 @@ class SimpleEncodingSpaceMonitor:
         
         if self.enable_encoding_space:
             initial_space_size = self.pairwise_distance(self.baseline_encodings).mean().item()
-            print(f"📏 Initial encoding space size: {initial_space_size:.6f}")
+            print(f"📏 Initial encoding space size: {initial_space_size:.3e}")
             self.monitoring_data['encoding_space_size'].append(initial_space_size)
 
         if self.enable_jacobian_rank:
@@ -608,7 +608,7 @@ class SimpleEncodingSpaceMonitor:
 
     
     def plot_monitoring_curves(self, save_plot: bool = True):
-        """Generate a 2x2 panel plot of metrics: encoding size, min rank, RankMe, eval reward."""
+        """Generate a 2x2 panel plot of metrics: encoding size, min rank, RankMe, eval reward, cluster accuracy."""
         if not self.monitoring_data['steps']:
             print("No monitoring data to plot")
             return None
@@ -619,7 +619,7 @@ class SimpleEncodingSpaceMonitor:
         
         # Count enabled metrics to determine subplot layout
         enabled_metrics = [self.enable_encoding_space, self.enable_jacobian_rank, 
-                          self.enable_rankme, self.enable_eval_reward, self.enable_decoder_loss]
+                          self.enable_rankme, self.enable_eval_reward, self.enable_decoder_loss, self.enable_cluster_acc]
         num_enabled = sum(enabled_metrics)
         
         if num_enabled == 0:
@@ -631,10 +631,12 @@ class SimpleEncodingSpaceMonitor:
             rows, cols = 1, 1
         elif num_enabled == 2:
             rows, cols = 1, 2
-        elif num_enabled <= 4:
+        elif num_enabled <= 3:
             rows, cols = 2, 2
+        elif num_enabled <= 6:
+            rows, cols = 2, 3
         else:
-            rows, cols = 2, 3  # fallback
+            rows, cols = 3, 3  # fallback
         
         subplot_idx = 1
         
@@ -674,17 +676,21 @@ class SimpleEncodingSpaceMonitor:
 
         # Subplot 4: Eval reward (from CSV)
         if self.enable_eval_reward:
-            eval_csv = f"{self.cfg.work_dir}/eval.csv"
-            eval_df = pd.read_csv(eval_csv)
+            try:
+                eval_csv = f"{self.cfg.work_dir}/eval.csv"
+                eval_df = pd.read_csv(eval_csv)
 
-            ax = plt.subplot(rows, cols, subplot_idx)
-            ax.plot(eval_df['step'], eval_df['episode_reward'], 'c-')
-            ax.set_title('Eval Reward', fontsize=12, fontweight='bold')
-            ax.set_xlabel('Training Steps')
-            ax.set_ylabel('Reward')
-            ax.grid(True, alpha=0.3)
+                ax = plt.subplot(rows, cols, subplot_idx)
+                ax.plot(eval_df['step'], eval_df['episode_reward'], 'c-')
+                ax.set_title('Eval Reward', fontsize=12, fontweight='bold')
+                ax.set_xlabel('Training Steps')
+                ax.set_ylabel('Reward')
+                ax.grid(True, alpha=0.3)
+                subplot_idx += 1
+            except Exception as e:
+                print(f"⚠️ Could not load eval CSV: {e}")
 
-        # Additional subplot: Decoder loss (log scale)
+        # Subplot 5: Decoder evaluation loss (log scale)
         if self.enable_decoder_loss and 'decoder_loss' in self.monitoring_data:
             dec_losses = np.array([l if l is not None else np.nan for l in self.monitoring_data['decoder_loss']])
             if not np.all(np.isnan(dec_losses)):
@@ -694,6 +700,19 @@ class SimpleEncodingSpaceMonitor:
                 ax.set_xlabel('Training Steps')
                 ax.set_ylabel('MSE')
                 ax.set_yscale('log')
+                ax.grid(True, alpha=0.3)
+                subplot_idx += 1
+
+        # Subplot 6: Cluster accuracy
+        if self.enable_cluster_acc and 'cluster_acc' in self.monitoring_data:
+            cluster_accs = np.array([acc if acc is not None else np.nan for acc in self.monitoring_data['cluster_acc']])
+            if not np.all(np.isnan(cluster_accs)):
+                ax = plt.subplot(rows, cols, subplot_idx)
+                ax.plot(steps, cluster_accs * 100, 'orange', marker='o', linewidth=2, markersize=4)  # Convert to percentage
+                ax.set_title('Cluster Accuracy', fontsize=12, fontweight='bold')
+                ax.set_xlabel('Training Steps')
+                ax.set_ylabel('Accuracy (%)')
+                ax.set_ylim(0, 100)
                 ax.grid(True, alpha=0.3)
             subplot_idx += 1
 
