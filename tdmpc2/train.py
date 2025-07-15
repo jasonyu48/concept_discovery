@@ -46,6 +46,18 @@ def train(cfg: dict):
 	assert torch.cuda.is_available()
 	assert cfg.steps > 0, 'Must train for at least 1 step.'
 	cfg = parse_cfg(cfg)
+	# ------------------------------------------------------------------
+	# Protective check: abort if work directory already exists to avoid
+	# accidental overwrites. No directory creation should have happened yet.
+	# ------------------------------------------------------------------
+	if os.path.exists(cfg.work_dir):
+		eval_csv = cfg.work_dir / "eval.csv"
+		if eval_csv.exists():
+			print(colored('Work dir already contains eval.csv, indicating prior run:', 'red', attrs=['bold']))
+			print(colored(str(eval_csv), 'yellow'))
+			raise FileExistsError("Refusing to overwrite existing experiment directory.")
+		# If eval.csv does not yet exist, treat directory as fresh (e.g., only .hydra present)
+
 	set_seed(cfg.seed)
 	print(colored('Work dir:', 'yellow', attrs=['bold']), cfg.work_dir)
 

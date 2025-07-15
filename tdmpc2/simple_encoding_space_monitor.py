@@ -51,7 +51,7 @@ class SimpleEncodingSpaceMonitor:
         self.monitor_batch_size = getattr(self.cfg, 'monitor_batch_size', 1024)
         
         # Monitoring configuration
-        self.num_seed_obs = 128  # Number of diverse seed observations
+        self.num_seed_obs = 256  # Number of diverse seed observations
         self.monitor_freq = self.cfg.get('monitor_freq', 2000)  # Monitor every N steps
         # Dimension monitoring frequency & sample size
         self.dim_monitor_steps = getattr(self.cfg, 'dim_monitor_steps', 5000)
@@ -388,14 +388,23 @@ class SimpleEncodingSpaceMonitor:
                 return target_model(x_single.unsqueeze(0)).squeeze(0)
 
         jac_single = jacrev(single_forward)
-        # vmap maps jac_single over the batch dimension of obs yielding
-        # shape (B, E_dim, *input_shape)
-        jac_batch = vmap(jac_single, randomness="same")(obs)
-        jac_batch = jac_batch.flatten(start_dim=2)
+        # Compute Jacobians in smaller chunks to avoid GPU OOM
+        batch_size_jac = 8  # number of samples per sub-batch
+        min_rank_val = float('inf')
 
-        # Compute rank for each sample (batched matrix_rank supported by PyTorch)
-        ranks = torch.linalg.matrix_rank(jac_batch)
-        return int(ranks.min().item())
+        for start in range(0, obs.shape[0], batch_size_jac):
+            obs_b = obs[start:start + batch_size_jac]
+            # vmap over the smaller batch
+            jac_b = vmap(jac_single, randomness="same")(obs_b)
+            jac_b = jac_b.flatten(start_dim=2)
+
+            # Compute matrix ranks for this sub-batch
+            ranks_b = torch.linalg.matrix_rank(jac_b)
+            batch_min = ranks_b.min().item()
+            if batch_min < min_rank_val:
+                min_rank_val = batch_min
+
+        return int(min_rank_val)
     
     # -------------------------------------------------------------
     # Decoder evaluation helper

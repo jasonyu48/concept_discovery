@@ -287,6 +287,27 @@ class TDMPC2(torch.nn.Module):
 		enc_obs = self.model.encode(obs, task)
 
 		# ------------------------------------------------------------------
+		# Pairwise shrink loss: encourage smaller pairwise distances between
+		# encoding vectors *across the batch dimension* (per-time-step).
+		# Efficient batched computation without explicit (B×B×D) tensor.
+		# ------------------------------------------------------------------
+		shrink_loss = torch.tensor(0.0, device=self.device)
+		if getattr(self.cfg, "shrink_coef", 0.0) > 0 and enc_obs.shape[1] > 1:
+			# enc_obs shape: (T+1, B, D)
+			B = enc_obs.shape[1]
+			# Compute squared norms per vector: (T+1, B)
+			sq = enc_obs.pow(2).sum(dim=-1)
+			# Batched Gram matrices: (T+1, B, B)
+			gram = torch.bmm(enc_obs, enc_obs.transpose(1, 2))
+			# Pairwise squared distances
+			dist2 = sq.unsqueeze(2) + sq.unsqueeze(1) - 2 * gram
+			# Exclude diagonal elements (distance=0 with itself)
+			diag_sum = torch.diagonal(dist2, dim1=1, dim2=2).sum(dim=-1)
+			dist2_sum = dist2.sum(dim=(1, 2)) - diag_sum
+			mean_pairwise = dist2_sum / (B * (B - 1))
+			shrink_loss = mean_pairwise.mean()
+
+		# ------------------------------------------------------------------
 		# Decoder reconstruction loss (detached) – no optimiser step yet
 		# ------------------------------------------------------------------
 		dec_loss = torch.tensor(0.0, device=self.device)
@@ -406,6 +427,7 @@ class TDMPC2(torch.nn.Module):
 			self.cfg.value_coef * value_loss +
 			self.cfg.pi_coef * pi_loss +  # Add policy loss to total
 			collapse_prevention_coef * collapse_loss +
+			self.cfg.shrink_coef * shrink_loss +
 			dec_loss  # reconstruction component
 		)
 
@@ -434,6 +456,7 @@ class TDMPC2(torch.nn.Module):
 			"termination_loss": termination_loss,
 			"total_loss": total_loss,
 			"collapse_loss": collapse_loss,
+			"shrink_loss": shrink_loss,
 			"grad_norm": grad_norm,
 			"pi_loss": pi_loss,
 			"pi_grad_norm": pi_grad_norm,

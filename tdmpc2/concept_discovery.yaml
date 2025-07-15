@@ -3,7 +3,7 @@ defaults:
     - _self_
 
 # environment
-task: counting3
+task: counting5
 obs: rgb
 episodic: true
 
@@ -13,13 +13,14 @@ eval_episodes: 10
 eval_freq: 3_000
 
 # training
-steps: 30_000
+steps: 400_000
 batch_size: 256
 reward_coef: 0.1
 value_coef: 0.1
 termination_coef: 1
 consistency_coef: 20
 pi_coef: 0.11
+shrink_coef: 0.0
 collapse_prevention: false  # enable/disable random-function predictor mechanism
 collapse_prevention_dim: 256
 collapse_prevention_network: linear
@@ -35,7 +36,7 @@ discount_min: 0.95
 discount_max: 0.995
 buffer_size: 100_000
 q_sample_ratio: 1.0  # Ratio of buffer data visible to Q-function and collapse prevention training (0.0-1.0)
-exp_name: concept_discovery_hori1
+exp_name: concept_discovery_vit
 train_print_freq: 100  # print training episodes every 500 episodes instead of every episode
 data_dir: ???
 JEPA_sg: false
@@ -56,6 +57,7 @@ simnorm_dim: 8
 save_obs_for_rankme: false
 rankme_samples: 30_000
 enable_decoder: true
+encoder_arch: vit
 
 monitor_rankme: true
 monitor_eval_reward: true
@@ -109,7 +111,7 @@ multitask: ???
 tasks: ???
 obs_shape: {rgb: [3, 64, 64]}
 action_dim: 1
-episode_length: 15
+episode_length: 10
 obs_shapes: ???
 action_dims: ???
 episode_lengths: ???

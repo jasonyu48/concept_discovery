@@ -156,6 +156,67 @@ def conv(in_shape, num_channels, latent_dim, act=None):
 	return nn.Sequential(*layers)
 
 
+class ViTEncoder(nn.Module):
+    """
+    Vision Transformer encoder that contains **no convolutional layers**.
+    It operates on 64×64 RGB observations (stacked frames allowed, e.g. C=9)
+    by:
+        1. Patchifying the image via `nn.Unfold` (a view, not conv)
+        2. Linear projection of flattened patches to `latent_dim`
+        3. Adding learnable positional embeddings
+        4. Passing through a stack of `TransformerEncoderLayer`s
+        5. Mean-pooling the token dimension to obtain a single latent vector
+    The design mirrors the conv encoder output dimension so the rest of the
+    codebase remains unchanged.
+    """
+    def __init__(self, cfg):
+        super().__init__()
+        self.cfg = cfg
+        # --- configuration ----
+        self.patch_size = getattr(cfg, "patch_size", 8)  # 8×8 default
+        C = cfg.obs_shape['rgb'][0]                      # 3 or 9
+        D = cfg.latent_dim                               # e.g. 512
+        num_patches = (64 // self.patch_size) ** 2       # 64×64 input guaranteed
+
+        # --- modules ----
+        self.shift_aug = ShiftAug()
+        self.preprocess = PixelPreprocess()
+        self.unfold = nn.Unfold(kernel_size=self.patch_size, stride=self.patch_size)
+        self.patch_embed = nn.Linear(C * self.patch_size * self.patch_size, D)
+        # Learnable positional embeddings
+        self.pos_embed = nn.Parameter(torch.zeros(1, num_patches, D))
+
+        # Transformer stack
+        depth = getattr(cfg, "vit_depth", 2)
+        nhead = getattr(cfg, "vit_nhead", 2)
+        mlp_ratio = getattr(cfg, "vit_mlp_ratio", 2)
+        encoder_layer = nn.TransformerEncoderLayer(
+            d_model=D,
+            nhead=nhead,
+            dim_feedforward=D * mlp_ratio,
+            dropout=0.0,
+            activation=nn.Mish(inplace=False),
+            batch_first=True,
+            norm_first=False,
+        )
+        self.encoder = nn.TransformerEncoder(encoder_layer, num_layers=depth)
+        self.norm = nn.LayerNorm(D)
+
+    def forward(self, x):
+        """Expect x of shape (B, C, 64, 64). Returns (B, latent_dim)."""
+        # Data augmentation & normalisation to match conv branch behaviour
+        x = self.shift_aug(x.float())
+        x = self.preprocess(x)
+
+        # (B, C, H, W) -> (B, N_patches, patch_dim)
+        patches = self.unfold(x).transpose(1, 2)
+        tokens = self.patch_embed(patches)  # (B, N, D)
+        tokens = tokens + self.pos_embed
+        y = self.encoder(tokens)            # (B, N, D)
+        z = self.norm(y.mean(dim=1))        # mean-pool -> (B, D)
+        return z
+
+
 def enc(cfg, out={}):
 	"""
 	Returns a dictionary of encoders for each observation in the dict.
@@ -167,10 +228,18 @@ def enc(cfg, out={}):
 			else:
 				out[k] = mlp(cfg.obs_shape[k][0] + cfg.task_dim, max(cfg.num_enc_layers-1, 1)*[cfg.enc_dim], cfg.latent_dim)
 		elif k == 'rgb':
-			if cfg.simnorm:
-				out[k] = conv(cfg.obs_shape[k], cfg.num_channels, cfg.latent_dim, act=SimNorm(cfg))
-			else:
-				out[k] = conv(cfg.obs_shape[k], cfg.num_channels, cfg.latent_dim)
+			encoder_arch = getattr(cfg, 'encoder_arch', 'cnn')
+			if encoder_arch == 'vit':
+				# Pure transformer encoder path
+				vit_enc = ViTEncoder(cfg)
+				if cfg.simnorm:
+					vit_enc = nn.Sequential(vit_enc, SimNorm(cfg))
+				out[k] = vit_enc
+			else:  # default CNN encoder path
+				if cfg.simnorm:
+					out[k] = conv(cfg.obs_shape[k], cfg.num_channels, cfg.latent_dim, act=SimNorm(cfg))
+				else:
+					out[k] = conv(cfg.obs_shape[k], cfg.num_channels, cfg.latent_dim)
 		else:
 			raise NotImplementedError(f"Encoder for observation type {k} not implemented.")
 	return nn.ModuleDict(out)

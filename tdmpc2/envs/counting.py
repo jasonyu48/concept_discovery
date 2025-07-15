@@ -24,7 +24,7 @@ class CountingObjectsEnv(gym.Env):
                  target_n: int = 3,
                  max_objects: int = 10,
                  img_size: int = 64,
-                 max_steps: int = 15,
+                 max_steps: int = 10,
                  seed: Optional[int] = None,
                  threshold: float = 0.3,
                  overlap_protection: bool = True):
@@ -184,7 +184,7 @@ def make_env(cfg):  # noqa: F811 – redefine to include wrapper
     env = CountingObjectsEnv(target_n=target_n,
                              max_objects=max_objects,
                              img_size=64,
-                             max_steps=getattr(cfg, 'episode_length', 15))
+                             max_steps=getattr(cfg, 'episode_length', 10))
     env = CountingWrapper(env, cfg)
     env.max_episode_steps = env.env.max_steps  # unwrap level property
     return env 
