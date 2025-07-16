@@ -13,7 +13,7 @@ class Buffer():
 
 	def __init__(self, cfg):
 		self.cfg = cfg
-		self._device = torch.device('cuda:0')
+		self._device = torch.device('cuda:0') if torch.cuda.is_available() else torch.device('cpu')
 		self._capacity = min(cfg.buffer_size, cfg.steps)
 		self._sampler = SliceSampler(
 			num_slices=self.cfg.batch_size,
@@ -89,16 +89,31 @@ class Buffer():
 	def _init(self, tds):
 		"""Initialize the replay buffer. Use the first episode to estimate storage requirements."""
 		print(f'Buffer capacity: {self._capacity:,}')
-		mem_free, _ = torch.cuda.mem_get_info()
-		bytes_per_step = sum([
-				(v.numel()*v.element_size() if not isinstance(v, TensorDict) \
-				else sum([x.numel()*x.element_size() for x in v.values()])) \
-			for v in tds.values()
-		]) / len(tds)
-		total_bytes = bytes_per_step*self._capacity
-		print(f'Storage required: {total_bytes/1e9:.2f} GB')
-		# Heuristic: decide whether to use CUDA or CPU memory
-		storage_device = 'cuda:0' if 5*total_bytes < mem_free else 'cpu'
+		
+		# Check if CUDA is available before accessing GPU memory info
+		if torch.cuda.is_available():
+			mem_free, _ = torch.cuda.mem_get_info()
+			bytes_per_step = sum([
+					(v.numel()*v.element_size() if not isinstance(v, TensorDict) \
+					else sum([x.numel()*x.element_size() for x in v.values()])) \
+				for v in tds.values()
+			]) / len(tds)
+			total_bytes = bytes_per_step*self._capacity
+			print(f'Storage required: {total_bytes/1e9:.2f} GB')
+			# Heuristic: decide whether to use CUDA or CPU memory
+			storage_device = 'cuda:0' if 5*total_bytes < mem_free else 'cpu'
+		else:
+			# CUDA not available, use CPU memory
+			bytes_per_step = sum([
+					(v.numel()*v.element_size() if not isinstance(v, TensorDict) \
+					else sum([x.numel()*x.element_size() for x in v.values()])) \
+				for v in tds.values()
+			]) / len(tds)
+			total_bytes = bytes_per_step*self._capacity
+			print(f'Storage required: {total_bytes/1e9:.2f} GB')
+			storage_device = 'cpu'
+			print('CUDA not available, using CPU memory for storage.')
+		
 		print(f'Using {storage_device.upper()} memory for storage.')
 		self._storage_device = torch.device(storage_device)
 		return self._reserve_buffer(

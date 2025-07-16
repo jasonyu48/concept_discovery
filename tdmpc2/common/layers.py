@@ -118,28 +118,74 @@ class NormedLinear(nn.Linear):
 			f"act={self.act.__class__.__name__})"
 
 
-def mlp(in_dim, mlp_dims, out_dim, act=None, dropout=0.):
+def mlp(in_dim, mlp_dims, out_dim, act=None, dropout=0., layernorm: bool = True):
 	"""
 	Basic building block of TD-MPC2.
-	MLP with LayerNorm, Mish activations, and optionally dropout.
+
+	Args:
+		in_dim (int): Input feature dimension.
+		mlp_dims (int | list[int]): Hidden layer dimensions.
+		out_dim (int): Output feature dimension.
+		act (nn.Module | None): Optional activation applied **after** the final layer.
+		dropout (float): Dropout probability applied *only* to the first hidden layer
+			(retaining the behaviour of the original implementation).
+		layernorm (bool): When ``True`` every hidden layer is a ``NormedLinear``
+			(LayerNorm + Mish). When ``False`` we build plain ``nn.Linear`` layers
+			without any LayerNorm.  The default preserves existing behaviour.
 	"""
+
 	if isinstance(mlp_dims, int):
 		mlp_dims = [mlp_dims]
+
 	dims = [in_dim] + mlp_dims + [out_dim]
-	mlp = nn.ModuleList()
+	layers_out: list[nn.Module] = []
+
 	for i in range(len(dims) - 2):
-		mlp.append(NormedLinear(dims[i], dims[i+1], dropout=dropout*(i==0)))
-	mlp.append(NormedLinear(dims[-2], dims[-1], act=act) if act else nn.Linear(dims[-2], dims[-1])) # the last layer has layernorm????
-	return nn.Sequential(*mlp)
+		in_d, out_d = dims[i], dims[i + 1]
+
+		if layernorm:
+			# Original behaviour: NormedLinear (Linear → Dropout → LayerNorm → Mish)
+			layers_out.append(NormedLinear(in_d, out_d, dropout=dropout * (i == 0)))
+		else:
+			# Plain Linear without LayerNorm
+			mods = [nn.Linear(in_d, out_d)]
+			if dropout and i == 0:
+				mods.append(nn.Dropout(dropout, inplace=False))
+			# Mirror original default activation (Mish) for hidden layers
+			mods.append(nn.Mish(inplace=False))
+			layers_out.append(nn.Sequential(*mods))
+
+	# ---- Final layer ----
+	last_in, last_out = dims[-2], dims[-1]
+	if act is not None:
+		if layernorm:
+			layers_out.append(NormedLinear(last_in, last_out, act=act))
+		else:
+			layers_out.append(nn.Sequential(nn.Linear(last_in, last_out), act))
+	else:
+		layers_out.append(nn.Linear(last_in, last_out))
+
+	return nn.Sequential(*layers_out)
 
 
-def conv(in_shape, num_channels, latent_dim, act=None):
+# -----------------------------------------------
+# CNN encoder helper
+# -----------------------------------------------
+
+
+def conv(in_shape, num_channels, latent_dim, act=None, *, shiftaug: bool = True):
 	"""
 	Basic convolutional encoder for TD-MPC2 with raw image observations.
-	4 layers of convolution with ReLU activations, followed by a linear layer.
+
+	Args:
+		in_shape (Tuple[int]): (C, H, W) input shape; H, W must be 64.
+		num_channels (int): Base channel width (default 32).
+		latent_dim (int): Expected latent dimension (must equal ``num_channels*4*4``).
+		act (nn.Module | None): Optional final activation (e.g. SimNorm).
+		shiftaug (bool): Apply random shift augmentation if ``True`` (default).
 	"""
-	assert in_shape[-1] == 64 # assumes rgb observations to be 64x64
-	
+	assert in_shape[-1] == 64  # assumes rgb observations to be 64x64
+
 	# Calculate flattened conv output size: num_channels * 4 * 4 for 64x64 input
 	conv_output_size = num_channels * 4 * 4
 
@@ -153,14 +199,20 @@ def conv(in_shape, num_channels, latent_dim, act=None):
 		" different encoder_arch (e.g. 'vit' or 'mlp')."
 	)
 
-	layers = [
-		ShiftAug(), PixelPreprocess(),
+	layers: list[nn.Module] = []
+	# Optional spatial shift augmentation
+	if shiftaug:
+		layers.append(ShiftAug())
+	# Pixel normalisation
+	layers.append(PixelPreprocess())
+	# Convolutional stem
+	layers += [
 		nn.Conv2d(in_shape[0], num_channels, 7, stride=2), nn.ReLU(inplace=False),
 		nn.Conv2d(num_channels, num_channels, 5, stride=2), nn.ReLU(inplace=False),
 		nn.Conv2d(num_channels, num_channels, 3, stride=2), nn.ReLU(inplace=False),
 		nn.Conv2d(num_channels, num_channels, 3, stride=1), nn.Flatten(),
 	]
-	if act:
+	if act is not None:
 		layers.append(act)
 	return nn.Sequential(*layers)
 
@@ -179,9 +231,15 @@ class RGBMLPEncoder(nn.Module):
 		# Build hidden layers following state-encoder convention
 		n_layers = max(cfg.num_enc_layers - 1, 1)
 		hidden_dims = [cfg.enc_dim] * n_layers
-		self.shift = ShiftAug()
+		# Optional random shift augmentation (enabled by default)
+		use_shift = getattr(cfg, "enc_shiftaug", True)
+		self.shift = ShiftAug() if use_shift else nn.Identity()
 		self.pre = PixelPreprocess()
-		self.mlp = mlp(in_dim, hidden_dims, cfg.latent_dim)
+
+		# Whether to include LayerNorm within the encoder MLP is controlled by
+		# cfg.enc_layernorm (default: True).
+		use_ln = getattr(cfg, "enc_layernorm", True)
+		self.mlp = mlp(in_dim, hidden_dims, cfg.latent_dim, layernorm=use_ln)
 
 	def forward(self, x):
 		# x: (B, C, 64, 64)
@@ -214,7 +272,9 @@ class ViTEncoder(nn.Module):
         num_patches = (64 // self.patch_size) ** 2       # 64×64 input guaranteed
 
         # --- modules ----
-        self.shift_aug = ShiftAug()
+        # Optional shift augmentation controlled by cfg.enc_shiftaug (default True)
+        use_shift = getattr(cfg, "enc_shiftaug", True)
+        self.shift_aug = ShiftAug() if use_shift else nn.Identity()
         self.preprocess = PixelPreprocess()
         self.unfold = nn.Unfold(kernel_size=self.patch_size, stride=self.patch_size)
         self.patch_embed = nn.Linear(C * self.patch_size * self.patch_size, D)
@@ -252,6 +312,100 @@ class ViTEncoder(nn.Module):
         return z
 
 
+# -----------------------------------------------------------------------------
+# Deep ResNet-style encoder (64×64 RGB → latent)
+# -----------------------------------------------------------------------------
+
+
+class _BasicBlock(nn.Module):
+	"""Minimal pre-activation ResNet basic block (Conv→ReLU→Conv + skip)."""
+
+	def __init__(self, in_ch: int, out_ch: int, stride: int = 1):
+		super().__init__()
+		self.conv1 = nn.Conv2d(in_ch, out_ch, 3, stride=stride, padding=1, bias=False)
+		self.relu = nn.ReLU(inplace=False)
+		self.conv2 = nn.Conv2d(out_ch, out_ch, 3, stride=1, padding=1, bias=False)
+		self.downsample = None
+		if stride != 1 or in_ch != out_ch:
+			self.downsample = nn.Conv2d(in_ch, out_ch, 1, stride=stride, bias=False)
+
+	def forward(self, x: torch.Tensor) -> torch.Tensor:  # noqa: D401
+		identity = x
+		x = self.conv1(x)
+		x = self.relu(x)
+		x = self.conv2(x)
+		if self.downsample is not None:
+			identity = self.downsample(identity)
+		x = x + identity
+		return self.relu(x)
+
+
+class ResNetEncoder(nn.Module):
+	"""Configurable deep ResNet-style encoder.
+
+	Key features
+	-------------
+	• Optional `ShiftAug` & pixel normalisation.
+	• Depth controlled by `cfg.resnet_blocks` (number of *blocks per stage*, default 2 ⇒ ResNet-18 layout).
+	• Kaiming (He) initialisation applied **only** to this encoder’s convolutional layers to avoid
+	  interfering with the global `init.weight_init` that WorldModel applies to linear layers.
+	"""
+
+	def __init__(self, cfg):
+		super().__init__()
+		C0 = cfg.num_channels  # base width (e.g. 32)
+		use_shift = getattr(cfg, "enc_shiftaug", True)
+		self.shift = ShiftAug() if use_shift else nn.Identity()
+		self.pre = PixelPreprocess()
+
+		# ----- Stem -----
+		self.stem = nn.Sequential(
+			nn.Conv2d(cfg.obs_shape["rgb"][0], C0, kernel_size=7, stride=2, padding=3, bias=False),
+			nn.ReLU(inplace=False),
+			nn.MaxPool2d(kernel_size=3, stride=2, padding=1),
+		)
+
+		# ----- Residual stages -----
+		blocks_per_stage = int(getattr(cfg, "resnet_blocks", 2))
+		channels = [C0, 2 * C0, 4 * C0, 8 * C0]
+		strides = [1, 2, 2, 2]  # first stage keeps spatial size
+		stages = []
+		in_ch = C0
+		for out_ch, st in zip(channels, strides):
+			blk = []
+			# First block may downsample
+			blk.append(_BasicBlock(in_ch, out_ch, stride=st))
+			in_ch = out_ch
+			# Additional blocks with stride=1
+			for _ in range(blocks_per_stage - 1):
+				blk.append(_BasicBlock(in_ch, in_ch, stride=1))
+			stages.append(nn.Sequential(*blk))
+		self.stages = nn.Sequential(*stages)
+
+		# ----- Head -----
+		self.avgpool = nn.AdaptiveAvgPool2d((1, 1))
+		self.proj = nn.Linear(in_ch, cfg.latent_dim)
+
+		# ----- Kaiming initialisation for conv layers -----
+		self.apply(self._kaiming_init)
+
+	@staticmethod
+	def _kaiming_init(m):
+		"""Kaiming normal initialisation for Conv/Linear layers with ReLU non-linearity."""
+		if isinstance(m, nn.Conv2d):
+			nn.init.kaiming_normal_(m.weight, mode="fan_out", nonlinearity="relu")
+			if m.bias is not None:
+				nn.init.constant_(m.bias, 0)
+
+	def forward(self, x: torch.Tensor) -> torch.Tensor:  # noqa: D401
+		x = self.shift(x.float())
+		x = self.pre(x)
+		x = self.stem(x)
+		x = self.stages(x)
+		x = self.avgpool(x).flatten(1)
+		return self.proj(x)
+
+
 def enc(cfg, out={}):
 	"""
 	Returns a dictionary of encoders for each observation in the dict.
@@ -276,11 +430,17 @@ def enc(cfg, out={}):
 				if cfg.simnorm:
 					mlp_enc = nn.Sequential(mlp_enc, SimNorm(cfg))
 				out[k] = mlp_enc
-			elif encoder_arch == 'cnn':  # default CNN encoder path
+			elif encoder_arch == 'resnet':
+				res_enc = ResNetEncoder(cfg)
 				if cfg.simnorm:
-					out[k] = conv(cfg.obs_shape[k], cfg.num_channels, cfg.latent_dim, act=SimNorm(cfg))
+					res_enc = nn.Sequential(res_enc, SimNorm(cfg))
+				out[k] = res_enc
+			elif encoder_arch == 'cnn':  # default CNN encoder path
+				shift = getattr(cfg, "enc_shiftaug", True)
+				if cfg.simnorm:
+					out[k] = conv(cfg.obs_shape[k], cfg.num_channels, cfg.latent_dim, act=SimNorm(cfg), shiftaug=shift)
 				else:
-					out[k] = conv(cfg.obs_shape[k], cfg.num_channels, cfg.latent_dim)
+					out[k] = conv(cfg.obs_shape[k], cfg.num_channels, cfg.latent_dim, shiftaug=shift)
 			else:
 				raise ValueError(f"Unsupported encoder_arch '{encoder_arch}'.")
 		else:
@@ -480,9 +640,12 @@ class IResNetTransition(nn.Module):
         return z + self.g(zcat)
 
     def __repr__(self):
-        if isinstance(self.g, nn.Sequential):
-            # Count only linear layers within the sequential container.
-            n_layers = sum(isinstance(m, nn.Linear) for m in self.g)
-        else:
-            n_layers = 1  # simple linear case
-        return f"IResNetTransition(z_dim={self.z_dim}, layers={n_layers})"
+        """Rich representation showing the internal MLP like `nn.Sequential`.
+
+        Matches the style used in WorldModel’s `__repr__` so that the transition
+        section prints full layer details (comparable to the Reward MLP output).
+        """
+        inner_repr = repr(self.g)
+        # Indent inner block by two spaces for nicer formatting alongside other modules
+        indented = "  " + inner_repr.replace("\n", "\n  ")
+        return f"IResNetTransition(\n{indented}\n)"

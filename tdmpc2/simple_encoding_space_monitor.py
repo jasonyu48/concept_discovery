@@ -540,6 +540,14 @@ class SimpleEncodingSpaceMonitor:
                 print(f"   ✅ Updated encoding space curve saved!")
             except Exception as e:
                 print(f"   ⚠️ Failed to generate encoding space curve: {e}")
+
+            # --- NEW: t-SNE cluster visualisation (if labels available) ---
+            if self.enable_cluster_acc and self.baseline_labels is not None:
+                try:
+                    self._plot_tsne_clusters(save_path=self.save_dir / "tsne_clusters.png")
+                    print("   📐 t-SNE cluster plot updated!")
+                except Exception as e:
+                    print(f"   ⚠️ Failed to generate t-SNE plot: {e}")
         
         # Save model periodically to same path (every 5 monitoring steps)
         if step % (self.monitor_freq * 5) == 0:
@@ -1161,6 +1169,52 @@ class SimpleEncodingSpaceMonitor:
 
         K_est = float(max_spec_val)
         return K_est
+
+    # -------------------------------------------------------------
+    # Helper: t-SNE cluster visualisation
+    # -------------------------------------------------------------
+
+    def _plot_tsne_clusters(self, save_path):
+        """Generate a 2-D t-SNE plot of current baseline encodings coloured by labels."""
+        try:
+            from sklearn.manifold import TSNE
+        except ImportError as _e:
+            print("⚠️ scikit-learn not installed; cannot generate t-SNE plot.")
+            return
+
+        if self.baseline_labels is None:
+            print("⚠️ No labels available for t-SNE clustering plot.")
+            return
+
+        z = self.baseline_encodings.detach().cpu().numpy()
+        labels = self.baseline_labels.detach().cpu().numpy()
+
+        tsne = TSNE(n_components=2, init="random", learning_rate="auto", perplexity=30, n_iter=1000)
+        z_2d = tsne.fit_transform(z)
+
+        plt.figure(figsize=(6, 5))
+        unique_labels = sorted(set(labels))
+        num_classes = len(unique_labels)
+
+        # Choose a *categorical* palette with visually distinct colours.
+        if num_classes <= 10:
+            base_cmap = plt.get_cmap("tab10")
+        elif num_classes <= 20:
+            base_cmap = plt.get_cmap("tab20")
+        else:
+            # For many classes fall back to repeating tab20 palette but shift hue
+            base_cmap = plt.get_cmap("tab20")
+
+        colors = [base_cmap(i % base_cmap.N) for i in range(num_classes)]
+
+        for cls, col in zip(unique_labels, colors):
+            idx = labels == cls
+            plt.scatter(z_2d[idx, 0], z_2d[idx, 1], s=10, alpha=0.85, label=str(cls), color=col)
+        plt.legend(title="Label")
+        plt.title("t-SNE of Encoder Latent Space")
+        plt.tight_layout()
+        plt.savefig(save_path, dpi=300)
+        plt.close()
 
 # Integration function for easy use in training loop
 def create_simple_encoding_monitor(cfg, encoder, env, save_dir=None, agent=None, buffer=None):

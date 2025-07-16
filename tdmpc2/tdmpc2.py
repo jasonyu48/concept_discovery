@@ -26,7 +26,7 @@ class TDMPC2(torch.nn.Module):
 	def __init__(self, cfg):
 		super().__init__()
 		self.cfg = cfg
-		self.device = torch.device('cuda:0')
+		self.device = torch.device('cuda:0') if torch.cuda.is_available() else torch.device('cpu')
 		self.model = WorldModel(cfg).to(self.device)
 
 		# Build parameter groups for the main optimizer (optionally includes decoder)
@@ -41,13 +41,15 @@ class TDMPC2(torch.nn.Module):
 		]
 		if getattr(self.cfg, 'enable_decoder', False):
 			param_groups.append({'params': self.model._decoder.parameters()})
-		self.optim = torch.optim.Adam(param_groups, lr=self.cfg.lr, capturable=True)
-		self.pi_optim = torch.optim.Adam(self.model._pi.parameters(), lr=self.cfg.lr, eps=1e-5, capturable=True)
+		# Use capturable=True only on CUDA devices for performance
+		capturable = torch.cuda.is_available()
+		self.optim = torch.optim.Adam(param_groups, lr=self.cfg.lr, capturable=capturable)
+		self.pi_optim = torch.optim.Adam(self.model._pi.parameters(), lr=self.cfg.lr, eps=1e-5, capturable=capturable)
 		self.model.eval()
 		self.scale = RunningScale(cfg)
 		self.cfg.iterations += 2*int(cfg.action_dim >= 20) # Heuristic for large action spaces
 		self.discount = torch.tensor(
-			[self._get_discount(ep_len) for ep_len in cfg.episode_lengths], device='cuda:0'
+			[self._get_discount(ep_len) for ep_len in cfg.episode_lengths], device=self.device
 		) if self.cfg.multitask else self._get_discount(cfg.episode_length)
 		print('Episode length:', cfg.episode_length)
 		print('Discount factor:', self.discount)

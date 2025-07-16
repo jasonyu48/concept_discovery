@@ -13,7 +13,7 @@ eval_episodes: 10
 eval_freq: 3_000
 
 # training
-steps: 1_200_000
+steps: 5_000_000
 batch_size: 256
 reward_coef: 2
 value_coef: 0.1
@@ -36,7 +36,7 @@ discount_min: 0.95
 discount_max: 0.995
 buffer_size: 100_000
 q_sample_ratio: 1.0  # Ratio of buffer data visible to Q-function and collapse prevention training (0.0-1.0)
-exp_name: concept_discovery_iresnet_mlp_simple_balanced_loss_long
+exp_name: concept_discovery_iresnet_mlp_resnet_encoder_256latent_balancedLoss_noln_noshift_2layerdyn
 train_print_freq: 100  # print training episodes every 500 episodes instead of every episode
 data_dir: ???
 JEPA_sg: false
@@ -48,7 +48,7 @@ grad_from_policy: false
 compile: false
 save_video: false
 save_agent: true
-seed: 2021
+seed: 2022
 monitor_freq: 3_000
 dim_monitor_steps: 30_000
 full_rank: false
@@ -57,11 +57,10 @@ simnorm_dim: 8
 save_obs_for_rankme: false
 rankme_samples: 30_000
 enable_decoder: true
-encoder_arch: mlp
 
-monitor_rankme: true
+monitor_rankme: false
 monitor_eval_reward: true
-monitor_jacobian_rank: true
+monitor_jacobian_rank: false
 monitor_encoding_space: true
 monitor_cluster_acc: true
 
@@ -88,14 +87,18 @@ vmax: +10
 
 # architecture
 model_size: ???
-num_enc_layers: 4
-enc_dim: 256
+encoder_arch: resnet
+num_enc_layers: 3
+enc_dim: 512
+enc_layernorm: false
+enc_shiftaug: false
 num_channels: 32
 mlp_dim: 512
-latent_dim: 10
+latent_dim: 256
+resnet_blocks: 8
 dynamics_arch: iresnet  # use i-ResNet transition model by default
 iresnet_C: 2.0         # Lipschitz constant C for i-ResNet
-simple_dynamics: true  # linear g if true
+simple_dynamics: false  # linear g if true
 collapsed_encoder_init: false  # initialise RGB MLP encoder in collapsed mode
 task_dim: 96
 num_q: 1

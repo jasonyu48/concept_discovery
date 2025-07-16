@@ -106,5 +106,10 @@ def termination_statistics(pred, target, eps=1e-9):
 	recall = tp / (tp + fn + eps)
 	precision = tp / (tp + fp + eps)
 	f1 = 2 * (precision * recall) / (precision + recall + eps)
-	return TensorDict({'termination_rate': rate,
-			'termination_f1': f1})
+	# Return plain dict for robust compatibility with TensorDict.update.
+	# A vanilla mapping is accepted across TorchRL versions, whereas returning
+	# a TensorDict here may hit internal version-specific assumptions.
+	return {
+		'termination_rate': rate,
+		'termination_f1': f1,
+	}

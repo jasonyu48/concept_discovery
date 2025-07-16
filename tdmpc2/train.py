@@ -19,7 +19,8 @@ from trainer.offline_trainer import OfflineTrainer
 from trainer.online_trainer import OnlineTrainer
 from common.logger import Logger
 
-torch.backends.cudnn.benchmark = True
+if torch.cuda.is_available():
+	torch.backends.cudnn.benchmark = True
 torch.set_float32_matmul_precision('high')
 
 
@@ -43,7 +44,7 @@ def train(cfg: dict):
 		$ python train.py task=dog-run steps=7000000
 	```
 	"""
-	assert torch.cuda.is_available()
+	# assert torch.cuda.is_available()
 	assert cfg.steps > 0, 'Must train for at least 1 step.'
 	cfg = parse_cfg(cfg)
 	# ------------------------------------------------------------------

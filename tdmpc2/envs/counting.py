@@ -26,7 +26,7 @@ class CountingObjectsEnv(gym.Env):
                  img_size: int = 64,
                  max_steps: int = 10,
                  seed: Optional[int] = None,
-                 threshold: float = 0.3,
+                 threshold: float = 0.4,
                  overlap_protection: bool = True):
         super().__init__()
         self.target_n = int(target_n)
@@ -35,6 +35,7 @@ class CountingObjectsEnv(gym.Env):
         self.img_size = int(img_size)
         self.max_steps = int(max_steps)
         self.threshold = float(threshold)
+        print(f"threshold: {self.threshold}")
         self.overlap_protection = bool(overlap_protection)
 
         # Continuous 1-D action in [-1,1]
@@ -105,6 +106,7 @@ class CountingObjectsEnv(gym.Env):
         self.shape = self._rng.choice(["circle", "square", "triangle", "line"])
         self.color = tuple(int(x) for x in self._rng.integers(30, 226, size=3))
         obs = self._generate_image()
+        self._last_obs = obs  # cache for true no-op reuse
         info = {}
         return obs, info
 
@@ -132,7 +134,13 @@ class CountingObjectsEnv(gym.Env):
             'terminated': terminated,
         }
 
-        obs = self._generate_image()
+        # If count changed, redraw; otherwise reuse previous frame for a true no-op
+        if delta != 0:
+            obs = self._generate_image()
+            self._last_obs = obs
+        else:
+            # Return cached observation to keep pixels unchanged
+            obs = self._last_obs
         return obs, reward, done, info
 
     # ------------------------------------------------------------------

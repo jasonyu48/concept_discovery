@@ -258,7 +258,7 @@ def plot_cluster_acc(seed: str, task: str) -> None:
     if not os.path.isdir(seed_dir):
         raise FileNotFoundError(f"Seed directory not found: {seed_dir}")
 
-    plt.figure(figsize=(6, 4))
+    plt.figure(figsize=(12, 8))
     any_data = False
 
     for exp_name in sorted(os.listdir(seed_dir)):
