@@ -113,6 +113,8 @@ class SimpleEncodingSpaceMonitor:
         self.enable_cluster_acc = getattr(self.cfg, 'monitor_cluster_acc', True)
         if self.enable_cluster_acc:
             self.monitoring_data['cluster_acc'] = []
+            # Track the best cluster accuracy encountered so far for saving the best t-SNE plot
+            self.best_cluster_acc = float('-inf')
         
         # -------------------------------------------------------------
         # RankMe setup (needed for baseline observation sampling)
@@ -467,6 +469,8 @@ class SimpleEncodingSpaceMonitor:
         metrics = {
             'step': step,
         }
+        # Track computed cluster accuracy for later use (e.g. in t-SNE plotting)
+        cluster_acc_computed = None
         
         # Update monitoring data
         self.monitoring_data['steps'].append(step)
@@ -486,6 +490,7 @@ class SimpleEncodingSpaceMonitor:
                 metrics['cluster_acc'] = acc
                 self.monitoring_data['cluster_acc'].append(acc)
                 print(f"   Cluster accuracy: {acc*100:.2f}%")
+                cluster_acc_computed = acc
             except Exception as e:
                 print(f"⚠️ Failed to compute cluster accuracy: {e}")
                 self.monitoring_data['cluster_acc'].append(None)
@@ -544,7 +549,7 @@ class SimpleEncodingSpaceMonitor:
             # --- NEW: t-SNE cluster visualisation (if labels available) ---
             if self.enable_cluster_acc and self.baseline_labels is not None:
                 try:
-                    self._plot_tsne_clusters(save_path=self.save_dir / "tsne_clusters.png")
+                    self._plot_tsne_clusters(save_path=self.save_dir / "tsne_clusters.png", cluster_acc=cluster_acc_computed)
                     print("   📐 t-SNE cluster plot updated!")
                 except Exception as e:
                     print(f"   ⚠️ Failed to generate t-SNE plot: {e}")
@@ -1174,8 +1179,14 @@ class SimpleEncodingSpaceMonitor:
     # Helper: t-SNE cluster visualisation
     # -------------------------------------------------------------
 
-    def _plot_tsne_clusters(self, save_path):
-        """Generate a 2-D t-SNE plot of current baseline encodings coloured by labels."""
+    def _plot_tsne_clusters(self, save_path, cluster_acc: Optional[float] = None):
+        """Generate a 2-D t-SNE plot of current baseline encodings coloured by labels and save
+        both the latest plot and the best-accuracy plot.
+        
+        Args:
+            save_path: Path to write the *latest* plot.
+            cluster_acc: Pre–computed cluster accuracy to show in title and to decide best plot.
+        """
         try:
             from sklearn.manifold import TSNE
         except ImportError as _e:
@@ -1186,8 +1197,15 @@ class SimpleEncodingSpaceMonitor:
             print("⚠️ No labels available for t-SNE clustering plot.")
             return
 
+        # -------------------------------------------------
+        # Compute t-SNE embedding
+        # -------------------------------------------------
         z = self.baseline_encodings.detach().cpu().numpy()
         labels = self.baseline_labels.detach().cpu().numpy()
+
+        # Use provided cluster accuracy (do NOT recompute). If not supplied, fall back to NaN.
+        if cluster_acc is None:
+            cluster_acc = float('nan')
 
         tsne = TSNE(n_components=2, init="random", learning_rate="auto", perplexity=30, n_iter=1000)
         z_2d = tsne.fit_transform(z)
@@ -1211,9 +1229,27 @@ class SimpleEncodingSpaceMonitor:
             idx = labels == cls
             plt.scatter(z_2d[idx, 0], z_2d[idx, 1], s=10, alpha=0.85, label=str(cls), color=col)
         plt.legend(title="Label")
-        plt.title("t-SNE of Encoder Latent Space")
+        # Show cluster accuracy (if available) in title
+        if not np.isnan(cluster_acc):
+            plt.title(f"t-SNE Latent Space (Acc: {cluster_acc*100:.2f}%)")
+        else:
+            plt.title("t-SNE Latent Space")
         plt.tight_layout()
+
+        # -------------------------------------------------
+        # Save latest plot
+        # -------------------------------------------------
         plt.savefig(save_path, dpi=300)
+
+        # -------------------------------------------------
+        # Save best-so-far plot (highest cluster accuracy)
+        # -------------------------------------------------
+        if not np.isnan(cluster_acc) and cluster_acc > getattr(self, 'best_cluster_acc', float('-inf')):
+            self.best_cluster_acc = cluster_acc
+            best_path = Path(save_path).with_name("tsne_clusters_best.png")
+            plt.savefig(best_path, dpi=300)
+            print(f"🔥 New best cluster accuracy {cluster_acc*100:.2f}% → saved to {best_path}")
+
         plt.close()
 
 # Integration function for easy use in training loop
