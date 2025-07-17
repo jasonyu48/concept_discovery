@@ -86,6 +86,8 @@ class WorldModel(nn.Module):
 		self._encoder = layers.enc(cfg)
 		# --- Transition / Dynamics model selection ---
 		dyn_arch = getattr(cfg, "dynamics_arch", "iresnet")  # default to iresnet
+		# --- Select dynamics architecture ---
+		mlp_dims_dyn = getattr(cfg, "dyn_dims", cfg.mlp_dim)  # can be int or list
 		if dyn_arch == "iresnet":
 			C = getattr(cfg, "iresnet_C", 2.0)
 			simple_dyn = getattr(cfg, "simple_dynamics", False)
@@ -93,22 +95,23 @@ class WorldModel(nn.Module):
 			self._dynamics = layers.IResNetTransition(
 				in_dim=in_dim,
 				z_dim=cfg.latent_dim,
-				mlp_dims=cfg.mlp_dim,
+				mlp_dims=mlp_dims_dyn,
 				C=C,
 				simple=simple_dyn,
 			)
 		elif dyn_arch == "mlp":
+			in_dim_full = cfg.latent_dim + cfg.action_dim + cfg.task_dim
 			if cfg.simnorm:
 				self._dynamics = layers.mlp(
-					cfg.latent_dim + cfg.action_dim + cfg.task_dim,
-					2 * [cfg.mlp_dim],
+					in_dim_full,
+					mlp_dims_dyn,
 					cfg.latent_dim,
 					act=layers.SimNorm(cfg),
 				)
 			else:
 				self._dynamics = layers.mlp(
-					cfg.latent_dim + cfg.action_dim + cfg.task_dim,
-					2 * [cfg.mlp_dim],
+					in_dim_full,
+					mlp_dims_dyn,
 					cfg.latent_dim,
 				)
 		else:

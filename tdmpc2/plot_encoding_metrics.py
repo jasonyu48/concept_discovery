@@ -432,7 +432,7 @@ def plot_rankme(seed: str, task: str, recalc: bool = False) -> None:
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Plot encoding, decoder, and clustering metrics for a seed's experiments.")
-    parser.add_argument("--seed", default=2021, help="Seed folder name")
+    parser.add_argument("--seed", default=2022, help="Seed folder name")
     parser.add_argument("--task", default="counting5", help="Task name (determines results and observation paths)")
     parser.add_argument("--results_root", default="/scratch/tshu2/jyu197/concept_discovery/tdmpc2/logs", help="Base directory that contains task subfolders")
     parser.add_argument("--recalculate_decoder_loss", default='False', help="Recompute decoder loss using saved model instead of reading from monitoring data.")

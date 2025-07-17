@@ -13,14 +13,14 @@ eval_episodes: 10
 eval_freq: 3_000
 
 # training
-steps: 5_000_000
+steps: 500_000
 batch_size: 256
 reward_coef: 2
 value_coef: 0.1
 termination_coef: 1
 consistency_coef: 2
 pi_coef: 0.11
-shrink_coef: 0.0
+shrink_coef: 0.0 # harmful, do not use
 collapse_prevention: false  # enable/disable random-function predictor mechanism
 collapse_prevention_dim: 256
 collapse_prevention_network: linear
@@ -36,7 +36,7 @@ discount_min: 0.95
 discount_max: 0.995
 buffer_size: 100_000
 q_sample_ratio: 1.0  # Ratio of buffer data visible to Q-function and collapse prevention training (0.0-1.0)
-exp_name: concept_discovery_iresnet_mlp_resnet_encoder_256latent_balancedLoss_noln_noshift_2layerdyn
+exp_name: concept_discovery_iresnet_resnet_encoder_512latent_balancedLoss_noln_noshift_2layerdyn
 train_print_freq: 100  # print training episodes every 500 episodes instead of every episode
 data_dir: ???
 JEPA_sg: false
@@ -94,9 +94,10 @@ enc_layernorm: false
 enc_shiftaug: false
 num_channels: 32
 mlp_dim: 512
-latent_dim: 256
+latent_dim: 512
 resnet_blocks: 8
-dynamics_arch: iresnet  # use i-ResNet transition model by default
+dynamics_arch: iresnet
+dyn_dims: 512
 iresnet_C: 2.0         # Lipschitz constant C for i-ResNet
 simple_dynamics: false  # linear g if true
 collapsed_encoder_init: false  # initialise RGB MLP encoder in collapsed mode
