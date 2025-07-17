@@ -48,7 +48,7 @@ class SimpleEncodingSpaceMonitor:
         self.save_dir.mkdir(exist_ok=True)
         
         # Unified batch size for all monitoring-related computations (encoding, distances, RankMe, etc.)
-        self.monitor_batch_size = getattr(self.cfg, 'monitor_batch_size', 1024)
+        self.monitor_batch_size = getattr(self.cfg, 'monitor_batch_size', 1024)  # <------------ try to decrease this if not enough memory
         
         # Monitoring configuration
         self.num_seed_obs = 256  # Number of diverse seed observations
@@ -391,7 +391,7 @@ class SimpleEncodingSpaceMonitor:
 
         jac_single = jacrev(single_forward)
         # Compute Jacobians in smaller chunks to avoid GPU OOM
-        batch_size_jac = 8  # number of samples per sub-batch
+        batch_size_jac = 8  # number of samples per sub-batch  <------------ try to decrease this if not enough memory
         min_rank_val = float('inf')
 
         for start in range(0, obs.shape[0], batch_size_jac):
@@ -1161,7 +1161,7 @@ class SimpleEncodingSpaceMonitor:
             return svals.max()
 
         # Compute spectral norms in manageable chunks to lower memory footprint
-        batch_size = 32  # process this many latent samples at a time
+        batch_size = 32  # process this many latent samples at a time         <------------ try to decrease this if not enough memory
         max_spec_val = float('-inf')
 
         for start in range(0, z_subset.shape[0], batch_size):
