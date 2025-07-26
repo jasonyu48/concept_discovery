@@ -105,7 +105,7 @@ class SimpleEncodingSpaceMonitor:
         if self.enable_rankme:
             self.monitoring_data['rankme'] = []
         self.monitoring_data['lipschitz_K'] = []
-        self.enable_decoder_loss = getattr(self.cfg, 'enable_decoder', False) and self.cfg.obs == 'rgb'
+        self.enable_decoder_loss = getattr(self.cfg, 'enable_decoder', True) and self.cfg.obs == 'rgb'
         if self.enable_decoder_loss:
             self.monitoring_data['decoder_loss'] = []
 

@@ -1,3 +1,5 @@
+#This works for headless server. If this does not work, use docker. The docker file is provided in ./docker
+
 conda create -n tdmpc2 python=3.9 -y
 conda activate tdmpc2
 conda install -c pytorch-nightly -c nvidia -c conda-forge pytorch=2.6.0.dev20241112 pytorch-cuda=12.4 torchvision=0.15.2 -y

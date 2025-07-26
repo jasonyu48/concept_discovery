@@ -55,22 +55,23 @@ class OnlineTrainer(Trainer):
 
 	def to_td(self, obs, action=None, reward=None, terminated=None):
 		"""Creates a TensorDict for a new episode."""
+		device = 'cuda' if torch.cuda.is_available() else 'cpu'
 		if isinstance(obs, dict):
-			obs = TensorDict(obs, batch_size=(), device='cpu')
+			obs = TensorDict(obs, batch_size=(), device=device)
 		else:
-			obs = obs.unsqueeze(0).cpu()
+			obs = obs.unsqueeze(0).to(device)
 		if action is None:
-			action = torch.full_like(self.env.rand_act(), float('nan'))
+			action = torch.full_like(self.env.rand_act(), float('nan')).to(device)
 		if reward is None:
-			reward = torch.tensor(float('nan'))
+			reward = torch.tensor(float('nan')).to(device)
 		if terminated is None:
-			terminated = torch.tensor(float('nan'))
+			terminated = torch.tensor(float('nan')).to(device)
 		td = TensorDict(
 			obs=obs,
 			action=action.unsqueeze(0),
 			reward=reward.unsqueeze(0),
 			terminated=terminated.unsqueeze(0),
-		batch_size=(1,))
+		batch_size=(1,), device=device)
 		return td
 
 	def train(self):
@@ -166,7 +167,7 @@ class OnlineTrainer(Trainer):
 				print(report)
 				
 				# Generate decoder GIFs once training is done (if enabled)
-				if getattr(self.cfg, 'enable_decoder', False):
+				if getattr(self.cfg, 'enable_decoder', True):
 					try:
 						self.agent.encoding_monitor.save_decoder_gifs(num_gifs=5)
 					except Exception as e:

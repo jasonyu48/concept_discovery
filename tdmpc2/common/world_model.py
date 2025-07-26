@@ -124,7 +124,7 @@ class WorldModel(nn.Module):
 			self._pi = layers.mlp(cfg.latent_dim + cfg.task_dim, 2*[cfg.mlp_dim], 2*cfg.action_dim)
 		self._Qs = layers.Ensemble([layers.mlp(cfg.latent_dim + cfg.action_dim + cfg.task_dim, 2*[cfg.mlp_dim], max(cfg.num_bins, 1), dropout=cfg.dropout) for _ in range(cfg.num_q)])
 		# Initialize optional decoder for pixel reconstruction
-		if getattr(cfg, 'enable_decoder', False):
+		if getattr(cfg, 'enable_decoder', True):
 			self._decoder = layers.dec(cfg)
 		else:
 			self._decoder = None

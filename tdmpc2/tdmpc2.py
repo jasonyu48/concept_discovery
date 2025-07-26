@@ -39,7 +39,7 @@ class TDMPC2(torch.nn.Module):
 			{'params': self.model._task_emb.parameters() if self.cfg.multitask else []},
 			{'params': self.model._collapse_pred.parameters() if getattr(self.cfg, 'collapse_prevention', False) else []}
 		]
-		if getattr(self.cfg, 'enable_decoder', False):
+		if getattr(self.cfg, 'enable_decoder', True):
 			param_groups.append({'params': self.model._decoder.parameters()})
 		# Use capturable=True only on CUDA devices for performance
 		capturable = torch.cuda.is_available()
@@ -313,7 +313,7 @@ class TDMPC2(torch.nn.Module):
 		# Decoder reconstruction loss (detached) – no optimiser step yet
 		# ------------------------------------------------------------------
 		dec_loss = torch.tensor(0.0, device=self.device)
-		if self.cfg.obs == 'rgb' and getattr(self.cfg, "enable_decoder", False):
+		if self.cfg.obs == 'rgb' and getattr(self.cfg, "enable_decoder", True):
 			# Target images: normalize entire observation tensor to [-1,1]
 			rgb_norm = (obs.to(self.device).float() / 255.0 - 0.5) * 2  # (T+1, B, C, H, W)
 			z_detached = enc_obs.detach()
