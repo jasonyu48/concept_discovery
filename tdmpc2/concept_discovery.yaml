@@ -36,7 +36,7 @@ discount_min: 0.95
 discount_max: 0.995
 buffer_size: 100_000
 q_sample_ratio: 1.0  # Ratio of buffer data visible to Q-function and collapse prevention training (0.0-1.0)
-exp_name: concept_discovery_iresnet_resnet_encoder_128latent_balancedLoss_noln_noshift_2layerdyn
+exp_name: concept_discovery_mlp_resnet_encoder_128latent_balancedLoss_noln_noshift_2layerdyn
 train_print_freq: 100  # print training episodes every 500 episodes instead of every episode
 data_dir: ???
 JEPA_sg: false
@@ -96,7 +96,7 @@ num_channels: 32
 mlp_dim: 512
 latent_dim: 128
 resnet_blocks: 8
-dynamics_arch: iresnet
+dynamics_arch: mlp
 dyn_dims: 512
 iresnet_C: 2.0         # Lipschitz constant C for i-ResNet
 simple_dynamics: false  # linear g if true

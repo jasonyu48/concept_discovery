@@ -27,6 +27,7 @@ pip install \
   pandas==2.0.3 \
   wandb==0.17.4 \
   matplotlib \
+  scikit-learn \
   gpustat
 
 # set environmental variables

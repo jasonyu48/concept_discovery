@@ -42,7 +42,7 @@ RUN conda update conda && \
     conda init
 
 # install additional packages for seamless experience
-RUN pip install matplotlib gpustat && \
+RUN pip install matplotlib gpustat scikit-learn && \
     pip cache purge
 
 # set environment variables for rendering
