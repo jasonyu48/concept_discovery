@@ -36,7 +36,7 @@ discount_min: 0.95
 discount_max: 0.995
 buffer_size: 100_000
 q_sample_ratio: 1.0  # Ratio of buffer data visible to Q-function and collapse prevention training (0.0-1.0)
-exp_name: concept_discovery_mlp_resnet_encoder_128latent_balancedLoss_noln_noshift_2layerdyn
+exp_name: concept_discovery_mlp_resnet_encoder_128latent_balancedLoss_noln_noshift_2layerdyn2
 train_print_freq: 100  # print training episodes every 500 episodes instead of every episode
 data_dir: ???
 JEPA_sg: false
@@ -131,7 +131,7 @@ hydra:
   job:
     chdir: false  # Don't change directory automatically
   run:
-    dir: ./logs/${task}/${seed}/${exp_name}  # Use same structure as work_dir
+    dir: ./tdmpc2/logs/${task}/${seed}/${exp_name}  # Use same structure as work_dir
   sweep:
-    dir: ./logs/${task}
+    dir: ./tdmpc2/logs/${task}
     subdir: ${seed}/${exp_name}

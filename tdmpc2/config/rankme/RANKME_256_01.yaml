@@ -121,7 +121,7 @@ hydra:
   job:
     chdir: false  # Don't change directory automatically
   run:
-    dir: ./logs/${task}/${seed}/${exp_name}  # Use same structure as work_dir
+    dir: ./tdmpc2/logs/${task}/${seed}/${exp_name}  # Use same structure as work_dir
   sweep:
-    dir: ./logs/${task}
+    dir: ./tdmpc2/logs/${task}
     subdir: ${seed}/${exp_name}
