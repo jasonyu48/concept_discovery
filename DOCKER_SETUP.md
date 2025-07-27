@@ -8,13 +8,15 @@ git clone <repository-url>
 cd concept_discovery
 
 # 2. Build Docker image (one-time setup)
-docker build -f Dockerfile-simple -t tdmpc2:simple .
+docker build --build-arg USER_ID=$(id -u) --build-arg GROUP_ID=$(id -g) \
+            -f Dockerfile-simple -t tdmpc2:simple .
 
-# 3. Create alias (one-time setup) 
-echo 'alias tdmpc2="docker run --rm -it --gpus all -e PYTHONUNBUFFERED=1 -v \$(pwd)/tdmpc2/logs:/workspace/tdmpc2/logs tdmpc2:simple python"' >> ~/.bashrc
+# 3. Create alias (one-time setup)
+echo 'alias tdmpc2="docker run --rm -it --gpus all --user $(id -u):$(id -g) \
+      -e PYTHONUNBUFFERED=1 -v $(pwd):/workspace -w /workspace tdmpc2:simple python"' >> ~/.bashrc && \
 source ~/.bashrc
 
-# 4. Run training with ultra-simple commands
+# 4. Run training with ultra-simple commands (always picks up current code/YAMLs)
 tdmpc2 train.py task=counting5 steps=1000
 ```
 
@@ -43,10 +45,10 @@ tdmpc2 evaluate.py checkpoint=logs/counting5/555/.../model.pt
 ### Manual Docker Commands (If No Alias)
 ```bash
 # GPU training
-docker run --gpus all -v $(pwd)/tdmpc2/logs:/workspace/tdmpc2/logs tdmpc2:simple python train.py
+docker run --rm --gpus all --user $(id -u):$(id -g) -v $(pwd):/workspace -w /workspace tdmpc2:simple python train.py
 
 # CPU training  
-docker run -v $(pwd)/tdmpc2/logs:/workspace/tdmpc2/logs tdmpc2:simple python train.py task=counting5 obs=state
+docker run --rm --user $(id -u):$(id -g) -v $(pwd):/workspace -w /workspace tdmpc2:simple python train.py task=counting5 obs=state
 ```
 
 ## Prerequisites
@@ -125,57 +127,13 @@ docker run --rm --gpus all nvidia/cuda:12.4-runtime-ubuntu22.04 nvidia-smi
 ### Out of Memory
 ```bash
 # Reduce batch size for smaller GPUs
-docker run --rm --gpus all -v $(pwd):/workspace -w /workspace/tdmpc2 \
+docker run --rm --gpus all -v $(pwd):/workspace -w /workspace \
   tdmpc2:latest python train.py task=counting5 batch_size=128 obs=rgb steps=10000
 ```
 
 ### Slow Performance on CPU
 ```bash
 # Use state observations instead of RGB for CPU training
-docker run --rm -v $(pwd):/workspace -w /workspace/tdmpc2 \
+docker run --rm -v $(pwd):/workspace -w /workspace \
   tdmpc2:latest python train.py task=counting5 obs=state steps=10000
 ```
-
-## Features
-
-✅ **GPU Acceleration**: Automatic RTX/GTX GPU detection and usage  
-✅ **RGB Observations**: 64x64 visual observations with software rendering  
-✅ **Cross-Platform**: Works on Linux, WSL2, and macOS (CPU mode)  
-✅ **Reproducible**: Identical results across different machines  
-✅ **Complete Environment**: All dependencies pre-installed  
-
-## Performance Notes
-
-- **GPU Training**: ~10x faster than CPU, supports RGB observations
-- **CPU Training**: Slower but works everywhere, recommended with state observations
-- **Memory Usage**: ~2-4GB GPU memory for typical tasks
-- **Storage**: Docker image ~3GB, logs vary by training length
-
-## Supported Tasks
-
-- `counting5` - Simple counting task (10 steps)
-- `cheetah-run` - Continuous control locomotion
-- `walker-walk` - Humanoid walking
-- `cartpole-balance` - Classic control
-- And more from dm_control suite
-
-## Configuration Options
-
-Common parameters:
-- `task=<task_name>` - Environment to train on
-- `obs=rgb|state` - Observation type (RGB images vs state vectors)
-- `steps=<number>` - Training steps
-- `seed=<number>` - Random seed for reproducibility
-
-## Output
-
-Training logs and models are saved to:
-```
-logs/<task>/<seed>/<experiment_name>/
-├── eval.csv          # Evaluation metrics
-├── train.csv         # Training metrics  
-├── model.pt          # Trained model
-└── encoding_monitor/ # Representation analysis
-```
-
-Access logs from host system after training completes. 
