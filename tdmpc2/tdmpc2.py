@@ -358,10 +358,10 @@ class TDMPC2(torch.nn.Module):
 			_zs_r = _zs.detach()
 		reward_preds = self.model.reward(_zs_r, action, task)
 		if self.cfg.episodic:
-			if self.cfg.grad_from_Q or self.cfg.grad_from_R or self.cfg.grad_from_policy or self.cfg.collapse_prevention:
-				termination_pred = self.model.termination(zs[1:].detach(), task, unnormalized=True)
-			else:
+			if self.cfg.original_tdmpc2_implementation:
 				termination_pred = self.model.termination(zs[1:], task, unnormalized=True)
+			else:
+				termination_pred = self.model.termination(zs[1:].detach(), task, unnormalized=True)
 
 		# Compute losses
 		reward_loss, value_loss = 0, 0
