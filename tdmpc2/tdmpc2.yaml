@@ -3,7 +3,7 @@ defaults:
     - _self_
 
 # environment
-task: counting3
+task: counting5
 obs: rgb
 episodic: true
 
@@ -13,13 +13,14 @@ eval_episodes: 10
 eval_freq: 3_000
 
 # training
-steps: 30_000
+steps: 500_000
 batch_size: 256
 reward_coef: 0.1
 value_coef: 0.1
 termination_coef: 1
 consistency_coef: 20
 pi_coef: 1.0
+shrink_coef: 0.0 # harmful, do not use
 collapse_prevention: false  # enable/disable random-function predictor mechanism
 collapse_prevention_dim: 256
 collapse_prevention_network: linear
@@ -28,7 +29,7 @@ scale_factor: 1.0
 rho: 0.5
 lr: 3e-4 #was 3e-4
 enc_lr_scale: 0.3
-grad_clip_norm: 200
+grad_clip_norm: 20
 tau: 0.01
 discount_denom: 5
 discount_min: 0.95
@@ -42,12 +43,13 @@ JEPA_sg: true
 grad_from_Q: true
 grad_from_R: true
 grad_from_policy: false
+original_tdmpc2_implementation: true
 
 # misc
 compile: false
 save_video: false
 save_agent: true
-seed: 2021
+seed: 2022
 monitor_freq: 3_000
 dim_monitor_steps: 30_000
 full_rank: false
@@ -57,9 +59,9 @@ save_obs_for_rankme: false
 rankme_samples: 30_000
 enable_decoder: true
 
-monitor_rankme: true
+monitor_rankme: false
 monitor_eval_reward: true
-monitor_jacobian_rank: true
+monitor_jacobian_rank: false
 monitor_encoding_space: true
 monitor_cluster_acc: true
 
@@ -86,11 +88,19 @@ vmax: +10
 
 # architecture
 model_size: ???
+encoder_arch: cnn
 num_enc_layers: 2
 enc_dim: 256
+enc_layernorm: true
+enc_shiftaug: true
 num_channels: 32
 mlp_dim: 512
 latent_dim: 512
+dynamics_arch: mlp
+dyn_dims: 512
+iresnet_C: 2.0         # Lipschitz constant C for i-ResNet
+simple_dynamics: false  # linear g if true
+collapsed_encoder_init: false  # initialise RGB MLP encoder in collapsed mode
 task_dim: 96
 num_q: 5
 dropout: 0.01
@@ -109,7 +119,7 @@ multitask: ???
 tasks: ???
 obs_shape: {rgb: [3, 64, 64]}
 action_dim: 1
-episode_length: 15
+episode_length: 10
 obs_shapes: ???
 action_dims: ???
 episode_lengths: ???
