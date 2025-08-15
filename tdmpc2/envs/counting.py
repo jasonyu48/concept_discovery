@@ -9,8 +9,8 @@ class CountingObjectsEnv(gym.Env):
 
     Observation   : 64×64 RGB image (channels-first when returned).
     Action space  : 1-D Box in [-1,1].  Value
-                    < –τ ⇒ remove one object (count –=1)
-                    >  τ ⇒ add one object    (count +=1)
+                    < –τ (threshold) ⇒ remove one object (count –=1)
+                    >  τ (threshold) ⇒ add one object    (count +=1)
                     else no-op.
     Episode ends  : when current count == target_n  OR  step == max_steps.
     Reward        : 1.0 on successful termination, else 0.0.
@@ -26,7 +26,7 @@ class CountingObjectsEnv(gym.Env):
                  img_size: int = 64,
                  max_steps: int = 10,
                  seed: Optional[int] = None,
-                 threshold: float = 0.4,
+                 threshold: float = 0.1,
                  overlap_protection: bool = True):
         super().__init__()
         self.target_n = int(target_n)
