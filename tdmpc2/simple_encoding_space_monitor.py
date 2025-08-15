@@ -876,6 +876,11 @@ class SimpleEncodingSpaceMonitor:
                 orig_img = (orig_img - omin) / (omax - omin + 1e-8)
                 rec_img = (rec_img + 1.0) / 2.0
                 rec_img = np.clip(rec_img, 0.0, 1.0)
+                # Optionally re-normalize reconstructed image to improve visibility
+                if getattr(self.cfg, 'better_decoder_image', False):
+                    rmin, rmax = rec_img.min(), rec_img.max()
+                    if rmax > rmin:
+                        rec_img = (rec_img - rmin) / (rmax - rmin + 1e-8)
                 comb = np.concatenate([orig_img, rec_img], axis=1)
                 comb_uint8 = (comb * 255).astype(np.uint8)
                 scale = getattr(self.cfg, 'gif_scale', 4)

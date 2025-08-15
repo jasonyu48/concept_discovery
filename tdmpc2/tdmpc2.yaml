@@ -112,6 +112,7 @@ wandb_entity: ???
 wandb_silent: false
 enable_wandb: false
 save_csv: true
+better_decoder_image: false
 
 # convenience
 work_dir: ???
