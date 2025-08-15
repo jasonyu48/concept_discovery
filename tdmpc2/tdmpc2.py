@@ -168,6 +168,15 @@ class TDMPC2(torch.nn.Module):
 		Returns:
 			torch.Tensor: Action to take in the environment.
 		"""
+		# Fast path: optionally use uniformly random actions during training
+		if getattr(self.cfg, 'random_action_selection', False) and not eval_mode:
+			# Directly sample a random action in [-1, 1] without any MPPI compute
+			a = torch.empty(self.cfg.action_dim, device=self.device).uniform_(-1.0, 1.0)
+			if self.cfg.multitask:
+				# Respect task-specific action masks if present
+				a = a * self.model._action_masks[task]
+			return a
+
 		# Sample policy trajectories
 		z = self.model.encode(obs, task)
 		if self.cfg.num_pi_trajs > 0:
@@ -216,7 +225,7 @@ class TDMPC2(torch.nn.Module):
 				std = std * self.model._action_masks[task]
 
 		# Select action
-		rand_idx = torch.randint(0, score.shape[0], (1,), device=score.device) #math.gumbel_softmax_sample(score.squeeze(1))
+		rand_idx = math.gumbel_softmax_sample(score.squeeze(1))
 		actions = torch.index_select(elite_actions, 1, rand_idx).squeeze(1)
 		a, std = actions[0], std[0]
 		if not eval_mode:

@@ -75,6 +75,7 @@ horizon: 1
 min_std: 0.05
 max_std: 2
 temperature: 0.5
+random_action_selection: false  # Use uniform random action selection during training
 
 # actor
 log_std_min: -10
