@@ -170,11 +170,21 @@ class TDMPC2(torch.nn.Module):
 		"""
 		# Fast path: optionally use uniformly random actions during training
 		if getattr(self.cfg, 'random_action_selection', False) and not eval_mode:
-			# Directly sample a random action in [-1, 1] without any MPPI compute
-			a = torch.empty(self.cfg.action_dim, device=self.device).uniform_(-1.0, 1.0)
-			if self.cfg.multitask:
-				# Respect task-specific action masks if present
-				a = a * self.model._action_masks[task]
+			# if 'counting' in self.cfg.task, then action is one of the three numbers: -0.9, 0, or 0.9 with equal probability
+			if 'counting' in self.cfg.task:
+				# Sample from {-0.9, 0.0, 0.9} uniformly and form an action vector
+				vals = torch.tensor([-0.9, 0.0, 0.9], device=self.device)
+				idx = torch.randint(0, 3, (), device=self.device)
+				a = torch.full((self.cfg.action_dim,), vals[idx].item(), device=self.device)
+				if self.cfg.multitask:
+					# Respect task-specific action masks if present
+					a = a * self.model._action_masks[task]
+			else:
+				# Directly sample a random action in [-1, 1] without any MPPI compute
+				a = torch.empty(self.cfg.action_dim, device=self.device).uniform_(-1.0, 1.0)
+				if self.cfg.multitask:
+					# Respect task-specific action masks if present
+					a = a * self.model._action_masks[task]
 			return a
 
 		# Sample policy trajectories

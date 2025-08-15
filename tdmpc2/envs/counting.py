@@ -26,7 +26,7 @@ class CountingObjectsEnv(gym.Env):
                  img_size: int = 64,
                  max_steps: int = 10,
                  seed: Optional[int] = None,
-                 threshold: float = 0.1,
+                 threshold: float = 0.3333,
                  overlap_protection: bool = True):
         super().__init__()
         self.target_n = int(target_n)
