@@ -172,7 +172,7 @@ class TDMPC2(torch.nn.Module):
 		if getattr(self.cfg, 'random_action_selection', False) and not eval_mode:
 			# if 'counting' in self.cfg.task, then action is one of the three numbers: -0.9, 0, or 0.9 with equal probability
 			if 'counting' in self.cfg.task:
-				# Sample from {-0.9, 0.0, 0.9} uniformly and form an action vector
+				# Sample uniformly and form an action vector
 				vals = torch.tensor([-0.99, -0.9, -0.8, -0.7, -0.6, -0.2, -0.1, 0.0, 0.1, 0.2, 0.6,0.7, 0.8, 0.9, 0.99], device=self.device)
 				idx = torch.randint(0, 15, (), device=self.device)
 				a = torch.full((self.cfg.action_dim,), vals[idx].item(), device=self.device)
