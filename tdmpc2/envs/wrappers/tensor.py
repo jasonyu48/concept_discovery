@@ -14,6 +14,13 @@ class TensorWrapper(gym.Wrapper):
 		super().__init__(env)
 	
 	def rand_act(self):
+		# Prefer environment-provided sampler if available (handles discrete one-hot cases)
+		if hasattr(self.env, 'rand_act'):
+			a = self.env.rand_act()
+			if isinstance(a, torch.Tensor):
+				return a.float()
+			return torch.from_numpy(np.asarray(a, dtype=np.float32))
+		# Fallback to uniform sample from the action space
 		return torch.from_numpy(self.action_space.sample().astype(np.float32))
 
 	def _try_f32_tensor(self, x):

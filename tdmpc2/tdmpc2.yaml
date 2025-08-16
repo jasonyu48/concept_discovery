@@ -4,6 +4,8 @@ defaults:
 
 # environment
 task: counting5
+discrete_action: false
+action_dim: 1
 obs: rgb
 episodic: true
 
@@ -120,7 +122,6 @@ task_title: ???
 multitask: ???
 tasks: ???
 obs_shape: {rgb: [3, 64, 64]}
-action_dim: 1
 episode_length: 10
 obs_shapes: ???
 action_dims: ???

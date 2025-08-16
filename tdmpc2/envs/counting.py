@@ -8,10 +8,12 @@ class CountingObjectsEnv(gym.Env):
     """Simple object-counting environment.
 
     Observation   : 64×64 RGB image (channels-first when returned).
-    Action space  : 1-D Box in [-1,1].  Value
-                    < –τ (threshold) ⇒ remove one object (count –=1)
-                    >  τ (threshold) ⇒ add one object    (count +=1)
-                    else no-op.
+    Action space  :
+        - Continuous mode (default): 1-D Box in [-1,1].  Value
+              < –τ (threshold) ⇒ remove one object (count –=1)
+              >  τ (threshold) ⇒ add one object    (count +=1)
+              else no-op.
+        - Discrete mode (when enabled): 3-D one-hot vector [remove, no-op, add].
     Episode ends  : when current count == target_n  OR  step == max_steps.
     Reward        : 1.0 on successful termination, else 0.0.
 
@@ -27,19 +29,27 @@ class CountingObjectsEnv(gym.Env):
                  max_steps: int = 10,
                  seed: Optional[int] = None,
                  threshold: float = 0.3333,
-                 overlap_protection: bool = True):
+                 overlap_protection: bool = True,
+                 discrete_action: bool = False):
         super().__init__()
         self.target_n = int(target_n)
         self.max_objects = int(max_objects)
         assert target_n >= 0 and target_n <= self.max_objects, f"target_n must be between 0 and max_objects"
         self.img_size = int(img_size)
         self.max_steps = int(max_steps)
-        self.threshold = float(threshold)
-        print(f"threshold: {self.threshold}")
         self.overlap_protection = bool(overlap_protection)
+        self.discrete_action = bool(discrete_action)
+        self.threshold = float(threshold)
+        if not discrete_action:
+            print(f"threshold: {self.threshold}")
 
-        # Continuous 1-D action in [-1,1]
-        self.action_space = gym.spaces.Box(low=-1.0, high=1.0, shape=(1,), dtype=np.float32)
+        # Action space definition
+        if self.discrete_action:
+            # One-hot 3 actions: remove, no-op, add
+            self.action_space = gym.spaces.Box(low=0.0, high=1.0, shape=(3,), dtype=np.float32)
+        else:
+            # Continuous 1-D action in [-1,1]
+            self.action_space = gym.spaces.Box(low=-1.0, high=1.0, shape=(1,), dtype=np.float32)
         # Observation: C,H,W with C=3, values 0-255 uint8
         self.observation_space = gym.spaces.Box(low=0, high=255,
                                                  shape=(3, self.img_size, self.img_size),
@@ -111,14 +121,23 @@ class CountingObjectsEnv(gym.Env):
         return obs, info
 
     def step(self, action):
-        # Action is numpy array shape (1,)
-        a = float(action[0])
-        if a < -self.threshold:
-            delta = -1
-        elif a > self.threshold:
-            delta = 1
+        # Support both continuous scalar action and discrete one-hot action vector
+        if self.discrete_action:
+            # Expect a length-3 vector; accept any real-valued vector and use argmax
+            a = np.asarray(action, dtype=np.float32).reshape(-1)
+            if a.size != 3:
+                raise ValueError(f"Discrete action mode expects vector of length 3, got shape {a.shape}")
+            idx = int(np.argmax(a))  # 0: remove, 1: noop, 2: add
+            delta = -1 if idx == 0 else (1 if idx == 2 else 0)
         else:
-            delta = 0
+            # Continuous 1-D action in [-1,1]
+            a = float(action[0])
+            if a < -self.threshold:
+                delta = -1
+            elif a > self.threshold:
+                delta = 1
+            else:
+                delta = 0
         # Update count within bounds; cannot go below 0 or above max_objects
         self.count = int(np.clip(self.count + delta, 0, self.max_objects))
         self.step_idx += 1
@@ -142,6 +161,16 @@ class CountingObjectsEnv(gym.Env):
             # Return cached observation to keep pixels unchanged
             obs = self._last_obs
         return obs, reward, done, info
+
+    def rand_act(self):
+        """Environment-native random action sampler.
+        In discrete mode, returns one-hot with lower probability of no-op.
+        In continuous mode, returns uniform scalar in [-1, 1].
+        """
+        if self.discrete_action:
+            idx = int(self._rng.choice(3, p=[0.4, 0.2, 0.4]))
+            return np.eye(3, dtype=np.float32)[idx]
+        return np.array([self._rng.uniform(-1.0, 1.0)], dtype=np.float32)
 
     # ------------------------------------------------------------------
     def render(self, mode='rgb_array'):
@@ -177,6 +206,12 @@ class CountingWrapper(gym.Wrapper):
         # Underlying env already returns 4-tuple, keep behaviour
         return self.env.step(action)
 
+    def rand_act(self):
+        # Forward to underlying environment's random action sampler
+        if hasattr(self.env, 'rand_act'):
+            return self.env.rand_act()
+        return self.env.action_space.sample()
+
 
 # Update factory to include wrapper
 
@@ -192,7 +227,8 @@ def make_env(cfg):  # noqa: F811 – redefine to include wrapper
     env = CountingObjectsEnv(target_n=target_n,
                              max_objects=max_objects,
                              img_size=64,
-                             max_steps=getattr(cfg, 'episode_length', 10))
+                             max_steps=getattr(cfg, 'episode_length', 10),
+                             discrete_action=bool(getattr(cfg, 'discrete_action', False)))
     env = CountingWrapper(env, cfg)
     env.max_episode_steps = env.env.max_steps  # unwrap level property
     return env 
