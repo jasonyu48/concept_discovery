@@ -151,6 +151,7 @@ class CountingObjectsEnv(gym.Env):
         info = {
             'success': terminated,
             'terminated': terminated,
+            'count': int(self.count),
         }
 
         # If count changed, redraw; otherwise reuse previous frame for a true no-op

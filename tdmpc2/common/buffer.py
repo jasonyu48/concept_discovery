@@ -185,7 +185,11 @@ class Buffer():
 		task = td.get('task', None)
 		if task is not None:
 			task = task[0].contiguous()
-		return obs, action, reward, terminated, task
+		# Optional observation type for analysis (e.g., object count per step)
+		obs_type = td.get('obs_type', None)
+		if obs_type is not None:
+			obs_type = obs_type[1:].contiguous()  # align with (T) after shift
+		return obs, action, reward, terminated, task, obs_type
 
 	def sample(self):
 		"""Sample a batch of subsequences from the buffer."""
@@ -195,12 +199,12 @@ class Buffer():
 		episode_ids = td.get('episode')[0].contiguous()  # Get episode IDs for each sample
 		
 		# Process the batch normally
-		obs, action, reward, terminated, task = self._prepare_batch(td)
+		obs, action, reward, terminated, task, obs_type = self._prepare_batch(td)
 		
 		# Generate Q-function mask for this batch
 		q_mask = self.get_q_mask_for_batch(episode_ids)
 		
-		return obs, action, reward, terminated, task, q_mask
+		return obs, action, reward, terminated, task, q_mask, obs_type
 
 	def get_q_mask_for_batch(self, episode_ids):
 		"""

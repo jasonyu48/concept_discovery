@@ -519,7 +519,8 @@ class TDMPC2(torch.nn.Module):
 		Returns:
 			dict: Dictionary of training statistics.
 		"""
-		obs, action, reward, terminated, task, q_mask = buffer.sample()
+		# Now returns obs_type for analysis as well
+		obs, action, reward, terminated, task, q_mask, obs_type = buffer.sample()
 		
 		# Now, `obs` is passed directly to _update without modification.
 		kwargs = {}

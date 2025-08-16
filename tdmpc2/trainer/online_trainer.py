@@ -53,7 +53,7 @@ class OnlineTrainer(Trainer):
 			episode_length= np.nanmean(ep_lengths),
 		)
 
-	def to_td(self, obs, action=None, reward=None, terminated=None):
+	def to_td(self, obs, action=None, reward=None, terminated=None, obs_type=None):
 		"""Creates a TensorDict for a new episode."""
 		device = 'cuda' if torch.cuda.is_available() else 'cpu'
 		if isinstance(obs, dict):
@@ -66,11 +66,17 @@ class OnlineTrainer(Trainer):
 			reward = torch.tensor(float('nan')).to(device)
 		if terminated is None:
 			terminated = torch.tensor(float('nan')).to(device)
+		# Observation type (e.g., object count). Store as int64; default to -1 if unknown.
+		if obs_type is None:
+			obs_type_tensor = torch.tensor(-1, dtype=torch.int64, device=device)
+		else:
+			obs_type_tensor = torch.tensor(int(obs_type), dtype=torch.int64, device=device)
 		td = TensorDict(
 			obs=obs,
 			action=action.unsqueeze(0),
 			reward=reward.unsqueeze(0),
 			terminated=terminated.unsqueeze(0),
+			obs_type=obs_type_tensor.unsqueeze(0),
 		batch_size=(1,), device=device)
 		return td
 
@@ -123,6 +129,7 @@ class OnlineTrainer(Trainer):
 					self._ep_idx = self.buffer.add(torch.cat(self._tds))
 
 				obs = self.env.reset()
+				# No info on count at reset through wrapper; store obs_type as unknown (-1)
 				self._tds = [self.to_td(obs)]
 
 			# Collect experience
@@ -131,7 +138,9 @@ class OnlineTrainer(Trainer):
 			else:
 				action = self.env.rand_act()
 			obs, reward, done, info = self.env.step(action)
-			self._tds.append(self.to_td(obs, action, reward, info['terminated']))
+			# Record observation type (object count) for analysis/monitoring
+			obs_type = int(info.get('count', -1)) if isinstance(info, dict) else -1
+			self._tds.append(self.to_td(obs, action, reward, info['terminated'], obs_type=obs_type))
 
 			# Update agent
 			if self._step >= self.cfg.seed_steps:
@@ -150,8 +159,9 @@ class OnlineTrainer(Trainer):
 		if hasattr(self.agent, 'encoding_monitor') and self.agent.encoding_monitor is not None:
 			# Compute final dimension metrics using complete buffer
 			try:
-				print("\n🧮 Computing full-dataset latent dimension metrics ...")
-				self.agent.encoding_monitor.compute_full_dim_metrics()
+				if getattr(self.cfg, 'monitor_bounds', True):
+					print("\n🧮 Computing full-dataset latent dimension metrics ...")
+					self.agent.encoding_monitor.compute_full_dim_metrics()
 			except Exception as e:
 				print(f"⚠️ Failed to compute full-dataset dimension metrics: {e}")
 

@@ -66,6 +66,7 @@ monitor_eval_reward: true
 monitor_jacobian_rank: false
 monitor_encoding_space: true
 monitor_cluster_acc: true
+monitor_bounds: false
 
 # planning
 mpc: true

@@ -116,6 +116,9 @@ class SimpleEncodingSpaceMonitor:
             # Track the best cluster accuracy encountered so far for saving the best t-SNE plot
             self.best_cluster_acc = float('-inf')
         
+        # Storage for per-count action distributions (for continuous 1-D case)
+        self.monitoring_data['action_dist_plot_saved'] = []
+        
         # -------------------------------------------------------------
         # RankMe setup (needed for baseline observation sampling)
         # -------------------------------------------------------------
@@ -531,13 +534,18 @@ class SimpleEncodingSpaceMonitor:
         # -------------------------------------------------------------
         # Dimension monitoring (pairwise latent distance & estimated dim)
         # -------------------------------------------------------------
-        if self.enable_dim_monitor and self.buffer is not None and (step % self.dim_monitor_steps == 0):
+        if (
+            self.enable_dim_monitor
+            and getattr(self.cfg, 'monitor_bounds', True)
+            and self.buffer is not None
+            and (step % self.dim_monitor_steps == 0)
+        ):
             dim_metrics = self.compute_full_dim_metrics()
             if dim_metrics:
                 metrics.update(dim_metrics)
         
         # Auto-save periodically and generate updated plots
-        if step % (self.monitor_freq * 5) == 0:
+        if step % (self.monitor_freq * 5) == 0:   # <------------
             self.save_monitoring_data()
             # Generate updated encoding space curve plot
             try:
@@ -553,6 +561,14 @@ class SimpleEncodingSpaceMonitor:
                     print("   📐 t-SNE cluster plot updated!")
                 except Exception as e:
                     print(f"   ⚠️ Failed to generate t-SNE plot: {e}")
+            
+            # --- NEW: Action distribution heatmap when cluster accuracy is high ---
+            try:
+                if self._should_plot_action_distribution(cluster_acc_computed):
+                    self._plot_action_distribution_heatmap(step)
+                    self.monitoring_data['action_dist_plot_saved'].append(step)
+            except Exception as e:
+                print(f"   ⚠️ Failed to generate action distribution heatmap: {e}")
         
         # Save model periodically to same path (every 5 monitoring steps)
         if step % (self.monitor_freq * 5) == 0:
@@ -737,6 +753,128 @@ class SimpleEncodingSpaceMonitor:
             print(f"📊 Saved monitoring curves to {plot_path}")
 
         return plt.gcf()
+
+    def _should_plot_action_distribution(self, cluster_acc: Optional[float]) -> bool:
+        """Whether to plot action distribution heatmap.
+        Conditions:
+        - Continuous action, 1-D
+        - cluster_acc >= 0.97 if available (else, skip)
+        - Buffer available with actions and obs_type
+        """
+        if getattr(self.cfg, 'discrete_action', False):
+            return False
+        if getattr(self.cfg, 'action_dim', 1) != 1:
+            return False
+        if cluster_acc is None:
+            return False
+        if isinstance(cluster_acc, torch.Tensor):
+            cluster_acc = float(cluster_acc.item())
+        return cluster_acc >= 0.97 and self.buffer is not None and self.buffer.num_eps > 0 # <------------
+
+    def _plot_action_distribution_heatmap(self, step: int):
+        """Generate a heatmap of action distributions for up to 11 observation types (counts).
+        Uses actions and obs_type from the replay buffer. Assumes continuous 1-D action.
+        Also saves the underlying histogram data as JSON alongside the figure.
+        """
+        # Access internal storage
+        storage = self.buffer._buffer._storage  # type: ignore
+        total_steps = self.buffer._steps_in_buffer  # type: ignore
+        td_all = storage[:total_steps]
+        actions = td_all.get('action', None)  # shape (N, action_dim)
+        obs_type = td_all.get('obs_type', None)  # shape (N,)
+        if actions is None or obs_type is None:
+            print("   ⚠️ Buffer does not contain actions or obs_type; skipping heatmap.")
+            return
+        # Flatten
+        if actions.ndim > 2:
+            actions = actions.view(-1, actions.shape[-1])
+        if obs_type.ndim > 1:
+            obs_type = obs_type.view(-1)
+        # Keep only valid obs_type (>=0)
+        mask_valid = (obs_type >= 0)
+        actions = actions[mask_valid]
+        obs_type = obs_type[mask_valid]
+        if actions.numel() == 0:
+            print("   ⚠️ No valid obs_type entries to plot action distribution.")
+            return
+        # Build bins for the 1-D action in [-1,1]
+        num_bins = 50
+        bin_edges = torch.linspace(-1.0, 1.0, steps=num_bins+1, device=actions.device)
+        # Determine which 11 types to show: counts 0..10 (clip to observed range)
+        unique_types = torch.unique(obs_type).to(torch.int64)
+        # Prefer 0..10 if available, otherwise take smallest 11
+        preferred = torch.arange(0, 11, device=obs_type.device, dtype=torch.int64)
+        types_to_show = preferred[torch.isin(preferred, unique_types)]
+        if types_to_show.numel() < 11:
+            remaining = unique_types[~torch.isin(unique_types, preferred)]
+            remaining = remaining.sort().values[:max(0, 11 - types_to_show.numel())]
+            types_to_show = torch.cat([types_to_show, remaining], dim=0)
+        # Build histogram per type
+        heat = []
+        labels = []
+        totals = []
+        for t in types_to_show.tolist():
+            sel = (obs_type == t)
+            if sel.sum() == 0:
+                hist = torch.zeros(num_bins, device=actions.device)
+                total = 0
+            else:
+                vals = actions[sel, 0]
+                hist = torch.histc(vals, bins=num_bins, min=-1.0, max=1.0)
+                hist = hist / hist.sum().clamp(min=1.0)
+                total = int(sel.sum().item())
+            heat.append(hist)
+            labels.append(str(t))
+            totals.append(total)
+        if not heat:
+            print("   ⚠️ Nothing to plot for action distribution heatmap.")
+            return
+        heat = torch.stack(heat, dim=0).cpu().numpy()  # (K, num_bins)
+        bin_edges_np = bin_edges.detach().cpu().numpy()
+        # Plot heatmap
+        plt.figure(figsize=(12, max(4, 0.5*len(labels))))
+        ax = plt.gca()
+        # Map x-axis to actual action values using extent
+        im = ax.imshow(
+            heat,
+            aspect='auto',
+            cmap='viridis',
+            origin='lower',
+            extent=[bin_edges_np[0], bin_edges_np[-1], -0.5, len(labels)-0.5]
+        )
+        ax.set_yticks(range(len(labels)))
+        ax.set_yticklabels(labels)
+        # Set x ticks to actual action values
+        xticks = np.linspace(-1.0, 1.0, num=11)
+        ax.set_xticks(xticks)
+        ax.set_xlabel('Action value')
+        ax.set_ylabel('Object count')
+        cbar = plt.colorbar(im)
+        cbar.set_label('Probability')
+        title = f"Action distribution by object count (step {step})"
+        plt.title(title)
+        out_path = self.save_dir / f"action_dist_heatmap_step_{step}.png"
+        plt.tight_layout()
+        plt.savefig(out_path, dpi=300)
+        plt.close()
+        print(f"   ✅ Saved action distribution heatmap to {out_path}")
+
+        # Save the histogram data used for plotting as JSON
+        json_path = self.save_dir / f"action_dist_heatmap_step_{step}.json"
+        data_to_save = {
+            'step': int(step),
+            'counts': labels,
+            'num_bins': int(num_bins),
+            'bin_edges': bin_edges_np.tolist(),
+            'hist': heat.tolist(),
+            'total_samples_per_count': totals,
+        }
+        try:
+            with open(json_path, 'w') as f:
+                json.dump(data_to_save, f, indent=2)
+            print(f"   💾 Saved heatmap data to {json_path}")
+        except Exception as e:
+            print(f"   ⚠️ Failed to save heatmap data JSON: {e}")
 
     # -------------------------------------------------------------
     # RankMe computation
