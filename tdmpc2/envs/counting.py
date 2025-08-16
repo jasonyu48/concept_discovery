@@ -40,7 +40,7 @@ class CountingObjectsEnv(gym.Env):
         self.overlap_protection = bool(overlap_protection)
         self.discrete_action = bool(discrete_action)
         self.threshold = float(threshold)
-        if not discrete_action:
+        if not self.discrete_action:
             print(f"threshold: {self.threshold}")
 
         # Action space definition
