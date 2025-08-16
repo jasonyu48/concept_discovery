@@ -30,7 +30,8 @@ class CountingObjectsEnv(gym.Env):
                  seed: Optional[int] = None,
                  threshold: float = 0.3333,
                  overlap_protection: bool = True,
-                 discrete_action: bool = False):
+                 discrete_action: bool = False,
+                 two_actions: bool = False):
         super().__init__()
         self.target_n = int(target_n)
         self.max_objects = int(max_objects)
@@ -39,14 +40,16 @@ class CountingObjectsEnv(gym.Env):
         self.max_steps = int(max_steps)
         self.overlap_protection = bool(overlap_protection)
         self.discrete_action = bool(discrete_action)
+        self.two_actions = bool(two_actions)
         self.threshold = float(threshold)
         if not self.discrete_action:
             print(f"threshold: {self.threshold}")
 
         # Action space definition
         if self.discrete_action:
-            # One-hot 3 actions: remove, no-op, add
-            self.action_space = gym.spaces.Box(low=0.0, high=1.0, shape=(3,), dtype=np.float32)
+            # One-hot actions: remove, [optional: no-op], add
+            n = 2 if self.two_actions else 3
+            self.action_space = gym.spaces.Box(low=0.0, high=1.0, shape=(n,), dtype=np.float32)
         else:
             # Continuous 1-D action in [-1,1]
             self.action_space = gym.spaces.Box(low=-1.0, high=1.0, shape=(1,), dtype=np.float32)
@@ -123,21 +126,30 @@ class CountingObjectsEnv(gym.Env):
     def step(self, action):
         # Support both continuous scalar action and discrete one-hot action vector
         if self.discrete_action:
-            # Expect a length-3 vector; accept any real-valued vector and use argmax
+            # Expect a length-2 or length-3 vector; accept any real-valued vector and use argmax
             a = np.asarray(action, dtype=np.float32).reshape(-1)
-            if a.size != 3:
-                raise ValueError(f"Discrete action mode expects vector of length 3, got shape {a.shape}")
-            idx = int(np.argmax(a))  # 0: remove, 1: noop, 2: add
-            delta = -1 if idx == 0 else (1 if idx == 2 else 0)
+            if a.size not in (2, 3):
+                raise ValueError(f"Discrete action mode expects vector of length 2 or 3, got shape {a.shape}")
+            idx = int(np.argmax(a))
+            if a.size == 2:
+                # 0: remove, 1: add
+                delta = -1 if idx == 0 else 1
+            else:
+                # 0: remove, 1: noop, 2: add
+                delta = -1 if idx == 0 else (1 if idx == 2 else 0)
         else:
             # Continuous 1-D action in [-1,1]
             a = float(action[0])
-            if a < -self.threshold:
-                delta = -1
-            elif a > self.threshold:
-                delta = 1
+            if self.two_actions:
+                # No no-op region: split by sign (tie to +1)
+                delta = -1 if a < 0.0 else 1
             else:
-                delta = 0
+                if a < -self.threshold:
+                    delta = -1
+                elif a > self.threshold:
+                    delta = 1
+                else:
+                    delta = 0
         # Update count within bounds; cannot go below 0 or above max_objects
         self.count = int(np.clip(self.count + delta, 0, self.max_objects))
         self.step_idx += 1
@@ -169,6 +181,9 @@ class CountingObjectsEnv(gym.Env):
         In continuous mode, returns uniform scalar in [-1, 1].
         """
         if self.discrete_action:
+            if self.two_actions:
+                idx = int(self._rng.choice(2, p=[0.5, 0.5]))
+                return np.eye(2, dtype=np.float32)[idx]
             idx = int(self._rng.choice(3, p=[0.4, 0.2, 0.4]))
             return np.eye(3, dtype=np.float32)[idx]
         return np.array([self._rng.uniform(-1.0, 1.0)], dtype=np.float32)
@@ -229,7 +244,8 @@ def make_env(cfg):  # noqa: F811 – redefine to include wrapper
                              max_objects=max_objects,
                              img_size=64,
                              max_steps=getattr(cfg, 'episode_length', 10),
-                             discrete_action=bool(getattr(cfg, 'discrete_action', False)))
+                             discrete_action=bool(getattr(cfg, 'discrete_action', False)),
+                             two_actions=bool(getattr(cfg, 'two_actions', False)))
     env = CountingWrapper(env, cfg)
     env.max_episode_steps = env.env.max_steps  # unwrap level property
     return env 

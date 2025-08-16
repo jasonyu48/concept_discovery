@@ -8,6 +8,7 @@ discrete_action: false
 action_dim: 1
 obs: rgb
 episodic: true
+two_actions: true
 
 # evaluation
 checkpoint: ???
@@ -38,7 +39,7 @@ discount_min: 0.95
 discount_max: 0.995
 buffer_size: 100_000
 q_sample_ratio: 1.0  # Ratio of buffer data visible to Q-function and collapse prevention training (0.0-1.0)
-exp_name: concept_discovery_mppi2
+exp_name: concept_discovery_two_actions_continuous
 train_print_freq: 100  # print training episodes every 500 episodes instead of every episode
 data_dir: ???
 JEPA_sg: false
@@ -78,7 +79,7 @@ horizon: 1
 min_std: 0.05
 max_std: 2
 temperature: 0.5
-random_action_selection: false  # Use uniform random action selection during training
+random_action_selection: true  # Use uniform random action selection during training
 
 # actor
 log_std_min: -10

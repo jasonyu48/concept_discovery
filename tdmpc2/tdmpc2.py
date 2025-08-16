@@ -173,19 +173,30 @@ class TDMPC2(torch.nn.Module):
 			# Counting task: provide task-specific random sampling
 			if 'counting' in self.cfg.task:
 				if getattr(self.cfg, 'discrete_action', False):
-					# Sample one-hot over 3 actions with lower probability on no-op
-					probs = torch.tensor([0.4, 0.2, 0.4], device=self.device)
-					idx = torch.multinomial(probs, num_samples=1).item()
+					# Sample one-hot over actions; if two_actions → no no-op
+					if getattr(self.cfg, 'two_actions', False):
+						probs = torch.tensor([0.5, 0.5], device=self.device)
+						idx = torch.multinomial(probs, num_samples=1).item()
+					else:
+						probs = torch.tensor([0.4, 0.2, 0.4], device=self.device)
+						idx = torch.multinomial(probs, num_samples=1).item()
 					a = torch.zeros(self.cfg.action_dim, device=self.device)
 					a[idx] = 1.0
 					if self.cfg.multitask:
 						# Respect task-specific action masks if present
 						a = a * self.model._action_masks[task]
 				else:
-					# Continuous scalar policy: pick a value around {-1, 0, +1}
-					vals = torch.tensor([-0.99, -0.9, -0.8, -0.7, -0.6, -0.2, -0.1, 0.0, 0.1, 0.2, 0.6, 0.7, 0.8, 0.9, 0.99], device=self.device)
-					idx = torch.randint(0, 15, (), device=self.device)
-					a = torch.full((self.cfg.action_dim,), vals[idx].item(), device=self.device)
+					# Continuous scalar policy: pick a value around {-1, [0], +1}
+					if getattr(self.cfg, 'two_actions', False):
+						# Sample only from negative or positive clusters (no 0 cluster)
+						neg_vals = torch.tensor([-0.99, -0.95, -0.9], device=self.device)
+						pos_vals = torch.tensor([0.9, 0.95, 0.99], device=self.device)
+						v = neg_vals[torch.randint(0, len(neg_vals), (), device=self.device)] if torch.rand((), device=self.device) < 0.5 else pos_vals[torch.randint(0, len(pos_vals), (), device=self.device)]
+						a = torch.full((self.cfg.action_dim,), v.item(), device=self.device)
+					else:
+						vals = torch.tensor([-0.99, -0.9, -0.8, -0.7, -0.6, -0.2, -0.1, 0.0, 0.1, 0.2, 0.6, 0.7, 0.8, 0.9, 0.99], device=self.device)
+						idx = torch.randint(0, 15, (), device=self.device)
+						a = torch.full((self.cfg.action_dim,), vals[idx].item(), device=self.device)
 					if self.cfg.multitask:
 						# Respect task-specific action masks if present
 						a = a * self.model._action_masks[task]
