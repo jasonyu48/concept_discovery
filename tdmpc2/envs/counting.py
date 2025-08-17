@@ -32,7 +32,8 @@ class CountingObjectsEnv(gym.Env):
                  overlap_protection: bool = True,
                  discrete_action: bool = False,
                  two_actions: bool = False,
-                 reward_mode: str = 'sparse'):
+                 reward_mode: str = 'sparse',
+                 terminate_on_success: bool = True):
         super().__init__()
         self.target_n = int(target_n)
         self.max_objects = int(max_objects)
@@ -43,6 +44,7 @@ class CountingObjectsEnv(gym.Env):
         self.discrete_action = bool(discrete_action)
         self.two_actions = bool(two_actions)
         self.reward_mode = str(reward_mode)
+        self.terminate_on_success = bool(terminate_on_success)
         self.threshold = float(threshold)
         if not self.discrete_action:
             print(f"threshold: {self.threshold}")
@@ -176,7 +178,8 @@ class CountingObjectsEnv(gym.Env):
         self.count = int(np.clip(self.count + delta, 0, self.max_objects))
         self.step_idx += 1
 
-        terminated = bool(self.count == self.target_n)
+        terminated_success = bool(self.count == self.target_n)
+        terminated = terminated_success if self.terminate_on_success else False
         truncated = bool(self.step_idx >= self.max_steps)
         done = terminated or truncated
 
@@ -184,8 +187,8 @@ class CountingObjectsEnv(gym.Env):
         reward = self.compute_state_reward(self.count)
 
         info = {
-            'success': terminated,
-            'terminated': terminated,
+            'success': terminated_success,
+            'terminated': terminated_success,
             'reward_pre': float(pre_reward),
             'count': int(self.count),
         }

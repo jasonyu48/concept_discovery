@@ -10,6 +10,7 @@ obs: rgb
 episodic: true
 two_actions: true
 reward_mode: sparse
+terminate_on_success: true
 
 # evaluation
 checkpoint: ???
