@@ -189,11 +189,11 @@ class TDMPC2(torch.nn.Module):
 						# Respect task-specific action masks if present
 						a = a * self.model._action_masks[task]
 				else:
-					# Continuous scalar policy: pick a value around {-1, [0], +1}
+					# Continuous scalar policy: pick a value around {-1, 0, +1}
 					if getattr(self.cfg, 'two_actions', False):
 						# Sample only from negative or positive clusters (no 0 cluster)
-						neg_vals = torch.tensor([-0.99, -0.95, -0.9], device=self.device)
-						pos_vals = torch.tensor([0.9, 0.95, 0.99], device=self.device)
+						neg_vals = torch.tensor([-0.99, -0.98, -0.96, -0.93, -0.89, -0.84], device=self.device)
+						pos_vals = torch.tensor([0.84, 0.89, 0.93, 0.96, 0.98, 0.99], device=self.device)
 						v = neg_vals[torch.randint(0, len(neg_vals), (), device=self.device)] if torch.rand((), device=self.device) < 0.5 else pos_vals[torch.randint(0, len(pos_vals), (), device=self.device)]
 						a = torch.full((self.cfg.action_dim,), v.item(), device=self.device)
 					else:

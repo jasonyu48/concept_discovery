@@ -8,9 +8,9 @@ discrete_action: false
 action_dim: 1
 obs: rgb
 episodic: true
-two_actions: true
+two_actions: false
 reward_mode: sparse
-terminate_on_success: false
+terminate_on_success: true
 
 # evaluation
 checkpoint: ???
@@ -18,7 +18,7 @@ eval_episodes: 10
 eval_freq: 3_000
 
 # training
-steps: 800_000
+steps: 500_000
 batch_size: 256
 reward_coef: 2
 value_coef: 0.1
@@ -41,15 +41,15 @@ discount_min: 0.95
 discount_max: 0.995
 buffer_size: 100_000
 q_sample_ratio: 1.0  # Ratio of buffer data visible to Q-function and collapse prevention training (0.0-1.0)
-exp_name: concept_discovery_two_actions_continuous_preaction_reward_fixed_episode_length2
+exp_name: concept_discovery_mppi3
 train_print_freq: 100  # print training episodes every 100 episodes instead of every episode
 data_dir: ???
 JEPA_sg: false
 grad_from_Q: false
-grad_from_R: false
+grad_from_R: true
 grad_from_policy: false
-grad_from_current_R: true
-current_reward: true
+grad_from_current_R: false
+current_reward: false
 original_tdmpc2_implementation: false
 
 # misc
@@ -83,7 +83,7 @@ horizon: 1
 min_std: 0.05
 max_std: 2
 temperature: 0.5
-random_action_selection: true  # Use uniform random action selection during training
+random_action_selection: false  # Use uniform random action selection during training
 
 # actor
 log_std_min: -10

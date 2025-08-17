@@ -273,7 +273,8 @@ def make_env(cfg):  # noqa: F811 – redefine to include wrapper
                              max_steps=getattr(cfg, 'episode_length', 10),
                              discrete_action=bool(getattr(cfg, 'discrete_action', False)),
                              two_actions=bool(getattr(cfg, 'two_actions', False)),
-                             reward_mode=str(getattr(cfg, 'reward_mode', 'sparse')))
+                             reward_mode=str(getattr(cfg, 'reward_mode', 'sparse')),
+                             terminate_on_success=bool(getattr(cfg, 'terminate_on_success', True)))
     env = CountingWrapper(env, cfg)
     env.max_episode_steps = env.env.max_steps  # unwrap level property
     return env 
