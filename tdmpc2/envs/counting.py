@@ -31,7 +31,8 @@ class CountingObjectsEnv(gym.Env):
                  threshold: float = 0.3333,
                  overlap_protection: bool = True,
                  discrete_action: bool = False,
-                 two_actions: bool = False):
+                 two_actions: bool = False,
+                 reward_mode: str = 'sparse'):
         super().__init__()
         self.target_n = int(target_n)
         self.max_objects = int(max_objects)
@@ -41,6 +42,7 @@ class CountingObjectsEnv(gym.Env):
         self.overlap_protection = bool(overlap_protection)
         self.discrete_action = bool(discrete_action)
         self.two_actions = bool(two_actions)
+        self.reward_mode = str(reward_mode)
         self.threshold = float(threshold)
         if not self.discrete_action:
             print(f"threshold: {self.threshold}")
@@ -107,6 +109,24 @@ class CountingObjectsEnv(gym.Env):
         obs = np.asarray(img, dtype=np.uint8).transpose(2, 0, 1)  # C,H,W
         return obs
 
+    # ------------------------------------------------------------------
+    # Reward API (state-based, reusable for pre/post action)
+    # ------------------------------------------------------------------
+    def compute_state_reward(self, count: int) -> float:
+        """Compute reward for a given state (count).
+        Modes:
+          - 'dense_reward': linearly decreases w.r.t. |count - target|, scaled to [0,1]
+          - default: sparse {1 if at target else 0}
+        """
+        if getattr(self, 'reward_mode', 'sparse') == 'dense_reward':
+            dist = abs(int(count) - int(self.target_n))
+            max_dist = max(int(self.max_objects), 1)
+            r = 1.0 - (dist / max_dist)
+            if int(count) == int(self.target_n):
+                r += 1.0
+            return float(np.clip(r, 0.0, 2.0))
+        return 1.0 if int(count) == int(self.target_n) else 0.0
+
     # Gymnasium API -----------------------------------------------------
     def reset(self, *, seed: Optional[int] = None, options=None):
         if seed is not None:
@@ -125,6 +145,8 @@ class CountingObjectsEnv(gym.Env):
 
     def step(self, action):
         # Support both continuous scalar action and discrete one-hot action vector
+        # Pre-action reward on current state
+        pre_reward = self.compute_state_reward(self.count)
         if self.discrete_action:
             # Expect a length-2 or length-3 vector; accept any real-valued vector and use argmax
             a = np.asarray(action, dtype=np.float32).reshape(-1)
@@ -158,11 +180,13 @@ class CountingObjectsEnv(gym.Env):
         truncated = bool(self.step_idx >= self.max_steps)
         done = terminated or truncated
 
-        reward = 1.0 if terminated else 0.0
+        # Post-action reward using unified reward function
+        reward = self.compute_state_reward(self.count)
 
         info = {
             'success': terminated,
             'terminated': terminated,
+            'reward_pre': float(pre_reward),
             'count': int(self.count),
         }
 
@@ -245,7 +269,8 @@ def make_env(cfg):  # noqa: F811 – redefine to include wrapper
                              img_size=64,
                              max_steps=getattr(cfg, 'episode_length', 10),
                              discrete_action=bool(getattr(cfg, 'discrete_action', False)),
-                             two_actions=bool(getattr(cfg, 'two_actions', False)))
+                             two_actions=bool(getattr(cfg, 'two_actions', False)),
+                             reward_mode=str(getattr(cfg, 'reward_mode', 'sparse')))
     env = CountingWrapper(env, cfg)
     env.max_episode_steps = env.env.max_steps  # unwrap level property
     return env 

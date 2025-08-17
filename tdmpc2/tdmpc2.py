@@ -39,6 +39,9 @@ class TDMPC2(torch.nn.Module):
 			{'params': self.model._task_emb.parameters() if self.cfg.multitask else []},
 			{'params': self.model._collapse_pred.parameters() if getattr(self.cfg, 'collapse_prevention', False) else []}
 		]
+		# Optional current reward head parameters
+		if getattr(self.cfg, 'current_reward', False) and getattr(self.model, '_reward_current', None) is not None:
+			param_groups.append({'params': self.model._reward_current.parameters()})
 		if getattr(self.cfg, 'enable_decoder', True):
 			param_groups.append({'params': self.model._decoder.parameters()})
 		# Use capturable=True only on CUDA devices for performance
@@ -316,7 +319,7 @@ class TDMPC2(torch.nn.Module):
 		return reward + discount * (1-terminated) * self.model.Q(next_z, action, task, return_type='min', target=True)
 
 
-	def _update(self, obs, action, reward, terminated, q_mask=None, task=None, step=None, pretrain_step=-1):
+	def _update(self, obs, action, reward, terminated, q_mask=None, task=None, step=None, pretrain_step=-1, reward_pre=None):
 		# Prepare for update
 		self.model.train()
 		# zero existing gradients once per iteration
@@ -397,6 +400,14 @@ class TDMPC2(torch.nn.Module):
 		else:
 			_zs_r = _zs.detach()
 		reward_preds = self.model.reward(_zs_r, action, task)
+		# Optional current reward head (from latent only)
+		reward_current_preds = None
+		if getattr(self.cfg, 'current_reward', False):
+			if getattr(self.cfg, 'grad_from_current_R', False):
+				_zs_rc = _zs  # allow gradients
+			else:
+				_zs_rc = _zs.detach()
+			reward_current_preds = self.model.reward_current(_zs_rc, task)
 		if self.cfg.episodic:
 			if self.cfg.original_tdmpc2_implementation:
 				termination_pred = self.model.termination(zs[1:], task, unnormalized=True)
@@ -406,12 +417,19 @@ class TDMPC2(torch.nn.Module):
 		# Compute losses
 		reward_loss, value_loss = 0, 0
 		
-		for t, (rew_pred_unbind, rew_unbind, td_targets_unbind, qs_unbind) in enumerate(zip(reward_preds.unbind(0), reward.unbind(0), td_targets.unbind(0), qs.unbind(1))):
+		# Use buffer-provided pre-action reward targets when current_reward is enabled
+		preaction_targets = reward_pre if getattr(self.cfg, 'current_reward', False) else None
+		for t, (rew_pred_unbind, rew_unbind, td_target_unbind, qs_unbind) in enumerate(zip(reward_preds.unbind(0), reward.unbind(0), td_targets.unbind(0), qs.unbind(1))):
 			reward_loss = reward_loss + math.soft_ce(rew_pred_unbind, rew_unbind, self.cfg).mean() * self.cfg.rho**t
+			# Current reward head loss (pre-action target)
+			if reward_current_preds is not None and preaction_targets is not None:
+				rew_curr_unbind = reward_current_preds[t]
+				pre_target_unbind = preaction_targets[t]
+				reward_loss = reward_loss + math.soft_ce(rew_curr_unbind, pre_target_unbind, self.cfg).mean() * self.cfg.rho**t
 			
 			# Apply Q-function mask to value loss if available
 			for _, qs_unbind_unbind in enumerate(qs_unbind.unbind(0)):
-				q_loss = math.soft_ce(qs_unbind_unbind, td_targets_unbind, self.cfg)
+				q_loss = math.soft_ce(qs_unbind_unbind, td_target_unbind, self.cfg)
 				if q_mask is not None:
 					# Apply mask to Q-function loss
 					q_loss = q_loss * q_mask.float()
@@ -530,8 +548,8 @@ class TDMPC2(torch.nn.Module):
 		Returns:
 			dict: Dictionary of training statistics.
 		"""
-		# Now returns obs_type for analysis as well
-		obs, action, reward, terminated, task, q_mask, obs_type = buffer.sample()
+		# Now returns obs_type and reward_pre for analysis as well
+		obs, action, reward, terminated, task, q_mask, obs_type, reward_pre = buffer.sample()
 		
 		# Now, `obs` is passed directly to _update without modification.
 		kwargs = {}
@@ -540,7 +558,7 @@ class TDMPC2(torch.nn.Module):
 		torch.compiler.cudagraph_mark_step_begin()
 		
 		# Run main update
-		update_info = self._update(obs, action, reward, terminated, q_mask=q_mask, **kwargs, step=step, pretrain_step=pretrain_step)
+		update_info = self._update(obs, action, reward, terminated, q_mask=q_mask, **kwargs, step=step, pretrain_step=pretrain_step, reward_pre=reward_pre)
 		
 		# Compute visibility percentage
 		resident = buffer.resident_eps

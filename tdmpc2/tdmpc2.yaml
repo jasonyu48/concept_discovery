@@ -8,6 +8,8 @@ discrete_action: false
 action_dim: 1
 obs: rgb
 episodic: true
+two_actions: true
+reward_mode: sparse
 
 # evaluation
 checkpoint: ???
@@ -45,6 +47,8 @@ JEPA_sg: true
 grad_from_Q: true
 grad_from_R: true
 grad_from_policy: false
+grad_from_current_R: false
+current_reward: false
 original_tdmpc2_implementation: true
 
 # misc

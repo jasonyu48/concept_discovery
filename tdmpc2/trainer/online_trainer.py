@@ -53,7 +53,7 @@ class OnlineTrainer(Trainer):
 			episode_length= np.nanmean(ep_lengths),
 		)
 
-	def to_td(self, obs, action=None, reward=None, terminated=None, obs_type=None):
+	def to_td(self, obs, action=None, reward=None, terminated=None, obs_type=None, reward_pre=None):
 		"""Creates a TensorDict for a new episode."""
 		device = 'cuda' if torch.cuda.is_available() else 'cpu'
 		if isinstance(obs, dict):
@@ -66,6 +66,10 @@ class OnlineTrainer(Trainer):
 			reward = torch.tensor(float('nan')).to(device)
 		if terminated is None:
 			terminated = torch.tensor(float('nan')).to(device)
+		if reward_pre is None:
+			reward_pre_t = torch.tensor(float('nan')).to(device)
+		else:
+			reward_pre_t = torch.tensor(float(reward_pre)).to(device)
 		# Observation type (e.g., object count). Store as int64; default to -1 if unknown.
 		if obs_type is None:
 			obs_type_tensor = torch.tensor(-1, dtype=torch.int64, device=device)
@@ -77,6 +81,7 @@ class OnlineTrainer(Trainer):
 			reward=reward.unsqueeze(0),
 			terminated=terminated.unsqueeze(0),
 			obs_type=obs_type_tensor.unsqueeze(0),
+			reward_pre=reward_pre_t.unsqueeze(0),
 		batch_size=(1,), device=device)
 		return td
 
@@ -140,7 +145,8 @@ class OnlineTrainer(Trainer):
 			obs, reward, done, info = self.env.step(action)
 			# Record observation type (object count) for analysis/monitoring
 			obs_type = int(info.get('count', -1)) if isinstance(info, dict) else -1
-			self._tds.append(self.to_td(obs, action, reward, info['terminated'], obs_type=obs_type))
+			reward_pre = float(info.get('reward_pre', float('nan')))
+			self._tds.append(self.to_td(obs, action, reward, info['terminated'], obs_type=obs_type, reward_pre=reward_pre))
 
 			# Update agent
 			if self._step >= self.cfg.seed_steps:

@@ -117,6 +117,11 @@ class WorldModel(nn.Module):
 		else:
 			raise ValueError(f"Unsupported dynamics_arch '{dyn_arch}'.")
 		self._reward = layers.mlp(cfg.latent_dim + cfg.action_dim + cfg.task_dim, 2*[cfg.mlp_dim], max(cfg.num_bins, 1))
+		# Optional current reward head: predicts reward from latent only (no action)
+		if getattr(cfg, 'current_reward', False):
+			self._reward_current = layers.mlp(cfg.latent_dim + cfg.task_dim, 2*[cfg.mlp_dim], max(cfg.num_bins, 1))
+		else:
+			self._reward_current = None
 		self._termination = layers.mlp(cfg.latent_dim + cfg.task_dim, 2*[cfg.mlp_dim], 1) if cfg.episodic else None
 		if cfg.full_rank:
 			self._pi = full_rank_layers.full_rank_mlp(cfg.latent_dim + cfg.task_dim, 2*[cfg.mlp_dim], 2*cfg.action_dim)
@@ -150,6 +155,8 @@ class WorldModel(nn.Module):
 			self._apply_collapsed_encoder_init()
 		
 		init.zero_([self._reward[-1].weight, self._Qs.params["2", "weight"]])
+		if self._reward_current is not None:
+			init.zero_([self._reward_current[-1].weight])
 
 		self.register_buffer("log_std_min", torch.tensor(cfg.log_std_min))
 		self.register_buffer("log_std_dif", torch.tensor(cfg.log_std_max) - self.log_std_min)
@@ -292,6 +299,16 @@ class WorldModel(nn.Module):
 			z = self.task_emb(z, task)
 		z = torch.cat([z, a], dim=-1)
 		return self._reward(z)
+	
+	def reward_current(self, z, task):
+		"""
+		Predicts current reward from latent state only (no action input).
+		"""
+		if not getattr(self.cfg, 'current_reward', False) or self._reward_current is None:
+			raise AttributeError('current_reward head is disabled')
+		if self.cfg.multitask:
+			z = self.task_emb(z, task)
+		return self._reward_current(z)
 	
 	def termination(self, z, task, unnormalized=False):
 		"""
