@@ -15,10 +15,10 @@ terminate_on_success: true
 # evaluation
 checkpoint: ???
 eval_episodes: 10
-eval_freq: 3_000
+eval_freq: 6_000
 
 # training
-steps: 500_000
+steps: 300_000
 batch_size: 256
 reward_coef: 0.1
 value_coef: 0.1
@@ -57,7 +57,7 @@ compile: false
 save_video: false
 save_agent: true
 seed: 2022
-monitor_freq: 3_000
+monitor_freq: 6_000
 dim_monitor_steps: 30_000
 full_rank: false
 simnorm: true
