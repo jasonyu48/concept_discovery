@@ -173,7 +173,7 @@ class Buffer():
 		Prepare a sampled batch for training (post-processing).
 		Expects `td` to be a TensorDict with batch size TxB.
 		"""
-		td = td.select("obs", "action", "reward", "terminated", "task", strict=False).to(self._device, non_blocking=True)
+		td = td.select("obs", "action", "reward", "terminated", "task", "reward_pre", strict=False).to(self._device, non_blocking=True)
 		obs = td.get('obs').contiguous()
 		action = td.get('action')[1:].contiguous()
 		reward = td.get('reward')[1:].unsqueeze(-1).contiguous()
@@ -185,7 +185,15 @@ class Buffer():
 		task = td.get('task', None)
 		if task is not None:
 			task = task[0].contiguous()
-		return obs, action, reward, terminated, task
+		# Optional observation type for analysis (e.g., object count per step)
+		obs_type = td.get('obs_type', None)
+		if obs_type is not None:
+			obs_type = obs_type[1:].contiguous()  # align with (T) after shift
+		# Optional pre-action reward target
+		reward_pre = td.get('reward_pre', None)
+		if reward_pre is not None:
+			reward_pre = reward_pre[1:].unsqueeze(-1).contiguous()
+		return obs, action, reward, terminated, task, obs_type, reward_pre
 
 	def sample(self):
 		"""Sample a batch of subsequences from the buffer."""
@@ -195,12 +203,12 @@ class Buffer():
 		episode_ids = td.get('episode')[0].contiguous()  # Get episode IDs for each sample
 		
 		# Process the batch normally
-		obs, action, reward, terminated, task = self._prepare_batch(td)
+		obs, action, reward, terminated, task, obs_type, reward_pre = self._prepare_batch(td)
 		
 		# Generate Q-function mask for this batch
 		q_mask = self.get_q_mask_for_batch(episode_ids)
 		
-		return obs, action, reward, terminated, task, q_mask
+		return obs, action, reward, terminated, task, q_mask, obs_type, reward_pre
 
 	def get_q_mask_for_batch(self, episode_ids):
 		"""

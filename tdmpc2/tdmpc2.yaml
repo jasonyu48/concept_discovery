@@ -4,16 +4,21 @@ defaults:
 
 # environment
 task: counting5
+discrete_action: false
+action_dim: 1
 obs: rgb
 episodic: true
+two_actions: true
+reward_mode: sparse
+terminate_on_success: true
 
 # evaluation
 checkpoint: ???
 eval_episodes: 10
-eval_freq: 3_000
+eval_freq: 6_000
 
 # training
-steps: 500_000
+steps: 300_000
 batch_size: 256
 reward_coef: 0.1
 value_coef: 0.1
@@ -43,6 +48,8 @@ JEPA_sg: true
 grad_from_Q: true
 grad_from_R: true
 grad_from_policy: false
+grad_from_current_R: false
+current_reward: false
 original_tdmpc2_implementation: true
 
 # misc
@@ -50,7 +57,7 @@ compile: false
 save_video: false
 save_agent: true
 seed: 2022
-monitor_freq: 3_000
+monitor_freq: 6_000
 dim_monitor_steps: 30_000
 full_rank: false
 simnorm: true
@@ -64,6 +71,7 @@ monitor_eval_reward: true
 monitor_jacobian_rank: false
 monitor_encoding_space: true
 monitor_cluster_acc: true
+monitor_bounds: false
 
 # planning
 mpc: true
@@ -75,6 +83,7 @@ horizon: 1
 min_std: 0.05
 max_std: 2
 temperature: 0.5
+random_action_selection: false  # Use uniform random action selection during training
 
 # actor
 log_std_min: -10
@@ -111,6 +120,7 @@ wandb_entity: ???
 wandb_silent: false
 enable_wandb: false
 save_csv: true
+better_decoder_image: false
 
 # convenience
 work_dir: ???
@@ -118,7 +128,6 @@ task_title: ???
 multitask: ???
 tasks: ???
 obs_shape: {rgb: [3, 64, 64]}
-action_dim: 1
 episode_length: 10
 obs_shapes: ???
 action_dims: ???

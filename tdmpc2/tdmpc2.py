@@ -39,6 +39,9 @@ class TDMPC2(torch.nn.Module):
 			{'params': self.model._task_emb.parameters() if self.cfg.multitask else []},
 			{'params': self.model._collapse_pred.parameters() if getattr(self.cfg, 'collapse_prevention', False) else []}
 		]
+		# Optional current reward head parameters
+		if getattr(self.cfg, 'current_reward', False) and getattr(self.model, '_reward_current', None) is not None:
+			param_groups.append({'params': self.model._reward_current.parameters()})
 		if getattr(self.cfg, 'enable_decoder', True):
 			param_groups.append({'params': self.model._decoder.parameters()})
 		# Use capturable=True only on CUDA devices for performance
@@ -168,6 +171,45 @@ class TDMPC2(torch.nn.Module):
 		Returns:
 			torch.Tensor: Action to take in the environment.
 		"""
+		# Fast path: optionally use uniformly random actions during training
+		if getattr(self.cfg, 'random_action_selection', False) and not eval_mode:
+			# Counting task: provide task-specific random sampling
+			if 'counting' in self.cfg.task and getattr(self.cfg, 'discrete_action', False):
+				# Sample one-hot over actions; if two_actions → no no-op
+				if getattr(self.cfg, 'two_actions', False):
+					probs = torch.tensor([0.5, 0.5], device=self.device)
+					idx = torch.multinomial(probs, num_samples=1).item()
+				else:
+					probs = torch.tensor([1/3, 1/3, 1/3], device=self.device)
+					idx = torch.multinomial(probs, num_samples=1).item()
+				a = torch.zeros(self.cfg.action_dim, device=self.device)
+				a[idx] = 1.0
+				if self.cfg.multitask:
+					# Respect task-specific action masks if present
+					a = a * self.model._action_masks[task]
+				# else:
+				# 	# Continuous scalar policy: pick a value around {-1, 0, +1}
+				# 	if getattr(self.cfg, 'two_actions', False):
+				# 		# Sample only from negative or positive clusters (no 0 cluster)
+				# 		neg_vals = torch.tensor([-0.99, -0.98, -0.96, -0.93, -0.89, -0.84], device=self.device)
+				# 		pos_vals = torch.tensor([0.84, 0.89, 0.93, 0.96, 0.98, 0.99], device=self.device)
+				# 		v = neg_vals[torch.randint(0, len(neg_vals), (), device=self.device)] if torch.rand((), device=self.device) < 0.5 else pos_vals[torch.randint(0, len(pos_vals), (), device=self.device)]
+				# 		a = torch.full((self.cfg.action_dim,), v.item(), device=self.device)
+				# 	else:
+				# 		vals = torch.tensor([-0.99, -0.98, -0.96, -0.93, -0.89, -0.84, -0.78, -0.71, 0, 0.71,0.78, 0.84, 0.89, 0.93, 0.96, 0.98, 0.99], device=self.device)
+				# 		idx = torch.randint(0, len(vals), (), device=self.device)
+				# 		a = torch.full((self.cfg.action_dim,), vals[idx].item(), device=self.device)
+				# 		if self.cfg.multitask:
+				# 			# Respect task-specific action masks if present
+				# 			a = a * self.model._action_masks[task]
+			else:
+				# Directly sample a random action in [-1, 1] without any MPPI compute
+				a = torch.empty(self.cfg.action_dim, device=self.device).uniform_(-1.0, 1.0)
+				if self.cfg.multitask:
+					# Respect task-specific action masks if present
+					a = a * self.model._action_masks[task]
+			return a
+
 		# Sample policy trajectories
 		z = self.model.encode(obs, task)
 		if self.cfg.num_pi_trajs > 0:
@@ -216,7 +258,7 @@ class TDMPC2(torch.nn.Module):
 				std = std * self.model._action_masks[task]
 
 		# Select action
-		rand_idx = torch.randint(0, len(actions), (1,), device=score.device) #math.gumbel_softmax_sample(score.squeeze(1))
+				rand_idx = torch.randint(0, len(actions), (1,), device=score.device) #math.gumbel_softmax_sample(score.squeeze(1))
 		actions = torch.index_select(elite_actions, 1, rand_idx).squeeze(1)
 		a, std = actions[0], std[0]
 		if not eval_mode:
@@ -276,7 +318,7 @@ class TDMPC2(torch.nn.Module):
 		return reward + discount * (1-terminated) * self.model.Q(next_z, action, task, return_type='min', target=True)
 
 
-	def _update(self, obs, action, reward, terminated, q_mask=None, task=None, step=None, pretrain_step=-1):
+	def _update(self, obs, action, reward, terminated, q_mask=None, task=None, step=None, pretrain_step=-1, reward_pre=None):
 		# Prepare for update
 		self.model.train()
 		# zero existing gradients once per iteration
@@ -357,6 +399,14 @@ class TDMPC2(torch.nn.Module):
 		else:
 			_zs_r = _zs.detach()
 		reward_preds = self.model.reward(_zs_r, action, task)
+		# Optional current reward head (from latent only)
+		reward_current_preds = None
+		if getattr(self.cfg, 'current_reward', False):
+			if getattr(self.cfg, 'grad_from_current_R', False):
+				_zs_rc = _zs  # allow gradients
+			else:
+				_zs_rc = _zs.detach()
+			reward_current_preds = self.model.reward_current(_zs_rc, task)
 		if self.cfg.episodic:
 			if self.cfg.original_tdmpc2_implementation:
 				termination_pred = self.model.termination(zs[1:], task, unnormalized=True)
@@ -366,12 +416,19 @@ class TDMPC2(torch.nn.Module):
 		# Compute losses
 		reward_loss, value_loss = 0, 0
 		
-		for t, (rew_pred_unbind, rew_unbind, td_targets_unbind, qs_unbind) in enumerate(zip(reward_preds.unbind(0), reward.unbind(0), td_targets.unbind(0), qs.unbind(1))):
+		# Use buffer-provided pre-action reward targets when current_reward is enabled
+		preaction_targets = reward_pre if getattr(self.cfg, 'current_reward', False) else None
+		for t, (rew_pred_unbind, rew_unbind, td_target_unbind, qs_unbind) in enumerate(zip(reward_preds.unbind(0), reward.unbind(0), td_targets.unbind(0), qs.unbind(1))):
 			reward_loss = reward_loss + math.soft_ce(rew_pred_unbind, rew_unbind, self.cfg).mean() * self.cfg.rho**t
+			# Current reward head loss (pre-action target)
+			if reward_current_preds is not None and preaction_targets is not None:
+				rew_curr_unbind = reward_current_preds[t]
+				pre_target_unbind = preaction_targets[t]
+				reward_loss = reward_loss + math.soft_ce(rew_curr_unbind, pre_target_unbind, self.cfg).mean() * self.cfg.rho**t
 			
 			# Apply Q-function mask to value loss if available
 			for _, qs_unbind_unbind in enumerate(qs_unbind.unbind(0)):
-				q_loss = math.soft_ce(qs_unbind_unbind, td_targets_unbind, self.cfg)
+				q_loss = math.soft_ce(qs_unbind_unbind, td_target_unbind, self.cfg)
 				if q_mask is not None:
 					# Apply mask to Q-function loss
 					q_loss = q_loss * q_mask.float()
@@ -490,7 +547,8 @@ class TDMPC2(torch.nn.Module):
 		Returns:
 			dict: Dictionary of training statistics.
 		"""
-		obs, action, reward, terminated, task, q_mask = buffer.sample()
+		# Now returns obs_type and reward_pre for analysis as well
+		obs, action, reward, terminated, task, q_mask, obs_type, reward_pre = buffer.sample()
 		
 		# Now, `obs` is passed directly to _update without modification.
 		kwargs = {}
@@ -499,7 +557,7 @@ class TDMPC2(torch.nn.Module):
 		torch.compiler.cudagraph_mark_step_begin()
 		
 		# Run main update
-		update_info = self._update(obs, action, reward, terminated, q_mask=q_mask, **kwargs, step=step, pretrain_step=pretrain_step)
+		update_info = self._update(obs, action, reward, terminated, q_mask=q_mask, **kwargs, step=step, pretrain_step=pretrain_step, reward_pre=reward_pre)
 		
 		# Compute visibility percentage
 		resident = buffer.resident_eps

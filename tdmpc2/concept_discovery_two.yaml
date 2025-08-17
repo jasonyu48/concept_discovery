@@ -8,17 +8,17 @@ discrete_action: false
 action_dim: 1
 obs: rgb
 episodic: true
-two_actions: false
+two_actions: true
 reward_mode: sparse
 terminate_on_success: false
 
 # evaluation
 checkpoint: ???
 eval_episodes: 10
-eval_freq: 6_000
+eval_freq: 3_000
 
 # training
-steps: 300_000
+steps: 800_000
 batch_size: 256
 reward_coef: 2
 value_coef: 0.1
@@ -41,13 +41,8 @@ discount_min: 0.95
 discount_max: 0.995
 buffer_size: 100_000
 q_sample_ratio: 1.0  # Ratio of buffer data visible to Q-function and collapse prevention training (0.0-1.0)
-<<<<<<< HEAD
-exp_name: concept_discovery_test_name2
-train_print_freq: 100  # print training episodes every 500 episodes instead of every episode
-=======
-exp_name: concept_discovery2
+exp_name: concept_discovery_two_actions_continuous_preaction_reward_fixed_episode_length2
 train_print_freq: 100  # print training episodes every 100 episodes instead of every episode
->>>>>>> d96f8e0205d8c69fb42e28a0ac8366e258a59bce
 data_dir: ???
 JEPA_sg: false
 grad_from_Q: false
@@ -62,7 +57,7 @@ compile: false
 save_video: false
 save_agent: true
 seed: 2022
-monitor_freq: 6_000
+monitor_freq: 3_000
 dim_monitor_steps: 30_000
 full_rank: false
 simnorm: false

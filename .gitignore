@@ -134,3 +134,5 @@ dmypy.json
 
 # Dummy files
 dummy_rankme_obs.pt
+
+old_version*
