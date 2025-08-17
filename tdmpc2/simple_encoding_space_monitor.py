@@ -545,7 +545,7 @@ class SimpleEncodingSpaceMonitor:
                 metrics.update(dim_metrics)
         
         # Auto-save periodically and generate updated plots
-        if step % (self.monitor_freq * 5) == 0:   # <------------
+        if step % (self.monitor_freq * 1) == 0:   # <------------
             self.save_monitoring_data()
             # Generate updated encoding space curve plot
             try:
