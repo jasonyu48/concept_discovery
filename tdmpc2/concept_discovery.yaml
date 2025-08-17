@@ -8,7 +8,7 @@ discrete_action: false
 action_dim: 1
 obs: rgb
 episodic: true
-two_actions: true
+two_actions: false
 reward_mode: sparse
 terminate_on_success: false
 
@@ -18,7 +18,7 @@ eval_episodes: 10
 eval_freq: 3_000
 
 # training
-steps: 800_000
+steps: 300_000
 batch_size: 256
 reward_coef: 2
 value_coef: 0.1
@@ -41,7 +41,7 @@ discount_min: 0.95
 discount_max: 0.995
 buffer_size: 100_000
 q_sample_ratio: 1.0  # Ratio of buffer data visible to Q-function and collapse prevention training (0.0-1.0)
-exp_name: concept_discovery_two_actions_continuous_preaction_reward_fixed_episode_length2
+exp_name: concept_discovery
 train_print_freq: 100  # print training episodes every 100 episodes instead of every episode
 data_dir: ???
 JEPA_sg: false
