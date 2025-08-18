@@ -20,7 +20,7 @@ eval_freq: 6_000
 # training
 steps: 300_000
 batch_size: 256
-reward_coef: 2
+reward_coef: 5
 value_coef: 0.1
 termination_coef: 1
 consistency_coef: 2
