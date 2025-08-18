@@ -186,7 +186,7 @@ class TDMPC2(torch.nn.Module):
 					return a_cached * self.model._action_masks[task]
 				return a_cached
 
-			# Otherwise, sample a new action and set it to repeat for the next 5 calls
+			# Otherwise, sample a new action and set it to repeat for the next 4 calls
 			# Counting task: provide task-specific random sampling
 			if 'counting' in self.cfg.task and getattr(self.cfg, 'discrete_action', False):
 				# Sample one-hot over actions; if two_actions → no no-op
@@ -202,9 +202,9 @@ class TDMPC2(torch.nn.Module):
 				# Directly sample a random action in [-1, 1] without any MPPI compute
 				a_unmasked = torch.empty(self.cfg.action_dim, device=self.device).uniform_(-1.0, 1.0)
 
-			# Cache and set repeat counter (next 5 actions will repeat this sample)
+			# Cache and set repeat counter (next 4 actions will repeat this sample)
 			self._rand_cached_action = a_unmasked.detach().clone()
-			self._rand_repeat_remaining = 5
+			self._rand_repeat_remaining = 4
 
 			# Apply task-specific action mask, if any
 			if self.cfg.multitask:

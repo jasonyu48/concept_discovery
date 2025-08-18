@@ -24,9 +24,9 @@ class CountingObjectsEnv(gym.Env):
 
     def __init__(self,
                  target_n: int = 3,
-                 max_objects: int = 10,
+                 max_objects: int = 8,
                  img_size: int = 64,
-                 max_steps: int = 5,
+                 max_steps: int = 4,
                  seed: Optional[int] = None,
                  threshold: float = 0.3333,
                  overlap_protection: bool = True,
@@ -266,11 +266,11 @@ def make_env(cfg):  # noqa: F811 – redefine to include wrapper
     except ValueError:
         raise ValueError('Task name must be counting<number>, e.g. counting3')
 
-    max_objects = getattr(cfg, 'max_objects', max(10, target_n * 2))
+    max_objects = getattr(cfg, 'max_objects', 8)
     env = CountingObjectsEnv(target_n=target_n,
                              max_objects=max_objects,
                              img_size=64,
-                             max_steps=getattr(cfg, 'episode_length', 5),
+                             max_steps=getattr(cfg, 'episode_length', 4),
                              discrete_action=bool(getattr(cfg, 'discrete_action', False)),
                              two_actions=bool(getattr(cfg, 'two_actions', False)),
                              reward_mode=str(getattr(cfg, 'reward_mode', 'sparse')),

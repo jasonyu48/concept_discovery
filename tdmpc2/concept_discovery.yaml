@@ -3,7 +3,7 @@ defaults:
     - _self_
 
 # environment
-task: counting5
+task: counting4
 discrete_action: true
 action_dim: 2
 obs: rgb
@@ -41,7 +41,7 @@ discount_min: 0.95
 discount_max: 0.995
 buffer_size: 100_000
 q_sample_ratio: 1.0  # Ratio of buffer data visible to Q-function and collapse prevention training (0.0-1.0)
-exp_name: concept_discovery_two_actions_final_discrete_more_explore
+exp_name: concept_discovery_two_actions_final_discrete_more_explore_8
 train_print_freq: 100  # print training episodes every 100 episodes instead of every episode
 data_dir: ???
 JEPA_sg: false
@@ -129,7 +129,7 @@ task_title: ???
 multitask: ???
 tasks: ???
 obs_shape: {rgb: [3, 64, 64]}
-episode_length: 5
+episode_length: 4
 obs_shapes: ???
 action_dims: ???
 episode_lengths: ???
