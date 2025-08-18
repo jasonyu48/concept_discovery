@@ -173,6 +173,20 @@ class TDMPC2(torch.nn.Module):
 		"""
 		# Fast path: optionally use uniformly random actions during training
 		if getattr(self.cfg, 'random_action_selection', False) and not eval_mode:
+			# Initialize repetition memory lazily to keep changes local to this method
+			if not hasattr(self, '_rand_repeat_remaining'):
+				self._rand_repeat_remaining = 0
+				self._rand_cached_action = None
+
+			# If we have remaining repeats, return the cached action (re-masked per task if needed)
+			if self._rand_repeat_remaining > 0 and self._rand_cached_action is not None:
+				self._rand_repeat_remaining -= 1
+				a_cached = self._rand_cached_action
+				if self.cfg.multitask:
+					return a_cached * self.model._action_masks[task]
+				return a_cached
+
+			# Otherwise, sample a new action and set it to repeat for the next 5 calls
 			# Counting task: provide task-specific random sampling
 			if 'counting' in self.cfg.task and getattr(self.cfg, 'discrete_action', False):
 				# Sample one-hot over actions; if two_actions → no no-op
@@ -182,33 +196,20 @@ class TDMPC2(torch.nn.Module):
 				else:
 					probs = torch.tensor([1/3, 1/3, 1/3], device=self.device)
 					idx = torch.multinomial(probs, num_samples=1).item()
-				a = torch.zeros(self.cfg.action_dim, device=self.device)
-				a[idx] = 1.0
-				if self.cfg.multitask:
-					# Respect task-specific action masks if present
-					a = a * self.model._action_masks[task]
-				# else:
-				# 	# Continuous scalar policy: pick a value around {-1, 0, +1}
-				# 	if getattr(self.cfg, 'two_actions', False):
-				# 		# Sample only from negative or positive clusters (no 0 cluster)
-				# 		neg_vals = torch.tensor([-0.99, -0.98, -0.96, -0.93, -0.89, -0.84], device=self.device)
-				# 		pos_vals = torch.tensor([0.84, 0.89, 0.93, 0.96, 0.98, 0.99], device=self.device)
-				# 		v = neg_vals[torch.randint(0, len(neg_vals), (), device=self.device)] if torch.rand((), device=self.device) < 0.5 else pos_vals[torch.randint(0, len(pos_vals), (), device=self.device)]
-				# 		a = torch.full((self.cfg.action_dim,), v.item(), device=self.device)
-				# 	else:
-				# 		vals = torch.tensor([-0.99, -0.98, -0.96, -0.93, -0.89, -0.84, -0.78, -0.71, 0, 0.71,0.78, 0.84, 0.89, 0.93, 0.96, 0.98, 0.99], device=self.device)
-				# 		idx = torch.randint(0, len(vals), (), device=self.device)
-				# 		a = torch.full((self.cfg.action_dim,), vals[idx].item(), device=self.device)
-				# 		if self.cfg.multitask:
-				# 			# Respect task-specific action masks if present
-				# 			a = a * self.model._action_masks[task]
+				a_unmasked = torch.zeros(self.cfg.action_dim, device=self.device)
+				a_unmasked[idx] = 1.0
 			else:
 				# Directly sample a random action in [-1, 1] without any MPPI compute
-				a = torch.empty(self.cfg.action_dim, device=self.device).uniform_(-1.0, 1.0)
-				if self.cfg.multitask:
-					# Respect task-specific action masks if present
-					a = a * self.model._action_masks[task]
-			return a
+				a_unmasked = torch.empty(self.cfg.action_dim, device=self.device).uniform_(-1.0, 1.0)
+
+			# Cache and set repeat counter (next 5 actions will repeat this sample)
+			self._rand_cached_action = a_unmasked.detach().clone()
+			self._rand_repeat_remaining = 5
+
+			# Apply task-specific action mask, if any
+			if self.cfg.multitask:
+				return a_unmasked * self.model._action_masks[task]
+			return a_unmasked
 
 		# Sample policy trajectories
 		z = self.model.encode(obs, task)
