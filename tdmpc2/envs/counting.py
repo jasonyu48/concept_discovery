@@ -134,6 +134,8 @@ class CountingObjectsEnv(gym.Env):
         if seed is not None:
             self._rng = np.random.default_rng(seed)
         self.step_idx = 0
+        # One-step grace: allow one extra step after first success before terminating
+        self._grace_remaining = 0
         # Start from a random count (could also start from 0)
         self.count = int(self._rng.integers(0, self.max_objects + 1))
 
@@ -179,7 +181,19 @@ class CountingObjectsEnv(gym.Env):
         self.step_idx += 1
 
         terminated_success = bool(self.count == self.target_n)
-        terminated = terminated_success if self.terminate_on_success else False
+        # Apply one-step grace when terminate_on_success is enabled
+        if self.terminate_on_success:
+            if getattr(self, '_grace_remaining', 0) > 0:
+                terminated = True
+                self._grace_remaining = 0
+            elif terminated_success:
+                # Defer termination by one step
+                terminated = False
+                self._grace_remaining = 1
+            else:
+                terminated = False
+        else:
+            terminated = False
         truncated = bool(self.step_idx >= self.max_steps)
         done = terminated or truncated
 
