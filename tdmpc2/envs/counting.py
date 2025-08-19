@@ -151,6 +151,7 @@ class CountingObjectsEnv(gym.Env):
         # Support both continuous scalar action and discrete one-hot action vector
         # Pre-action reward on current state
         pre_reward = self.compute_state_reward(self.count)
+        pre_count = int(self.count)
         if self.discrete_action:
             # Expect a length-2 or length-3 vector; accept any real-valued vector and use argmax
             a = np.asarray(action, dtype=np.float32).reshape(-1)
@@ -204,6 +205,9 @@ class CountingObjectsEnv(gym.Env):
             'success': terminated_success,
             'terminated': terminated_success,
             'reward_pre': float(pre_reward),
+            # Provide both pre- and post-action counts; keep 'count' for backward compatibility
+            'count_pre': int(pre_count),
+            'count_post': int(self.count),
             'count': int(self.count),
         }
 
