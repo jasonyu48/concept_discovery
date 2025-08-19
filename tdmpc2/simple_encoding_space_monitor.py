@@ -769,7 +769,7 @@ class SimpleEncodingSpaceMonitor:
             return False
         if isinstance(cluster_acc, torch.Tensor):
             cluster_acc = float(cluster_acc.item())
-        return cluster_acc >= 0.97 and self.buffer is not None and self.buffer.num_eps > 0 # <------------
+        return cluster_acc >= 2 and self.buffer is not None and self.buffer.num_eps > 0 # <------------ disabled heatmap
 
     def _plot_action_distribution_heatmap(self, step: int):
         """Generate a heatmap of action distributions for up to 11 observation types (counts).
