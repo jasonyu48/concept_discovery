@@ -3,7 +3,7 @@ defaults:
     - _self_
 
 # environment
-task: counting5
+task: counting4
 discrete_action: false
 action_dim: 1
 obs: rgb
@@ -79,7 +79,7 @@ iterations: 6
 num_samples: 512
 num_elites: 64
 num_pi_trajs: 24
-horizon: 3
+horizon: 1
 min_std: 0.05
 max_std: 2
 temperature: 0.5
@@ -128,7 +128,7 @@ task_title: ???
 multitask: ???
 tasks: ???
 obs_shape: {rgb: [3, 64, 64]}
-episode_length: 10
+episode_length: 4
 obs_shapes: ???
 action_dims: ???
 episode_lengths: ???
