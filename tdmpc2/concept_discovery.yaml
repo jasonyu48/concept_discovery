@@ -9,7 +9,7 @@ action_dim: 1
 obs: rgb
 episodic: true
 two_actions: true
-reward_mode: sparse
+reward_mode: dense_reward  #dense_reward
 terminate_on_success: true
 
 # evaluation
@@ -18,7 +18,7 @@ eval_episodes: 10
 eval_freq: 6_000
 
 # training
-steps: 300_000
+steps: 2000       #300_000
 batch_size: 256
 reward_coef: 2
 value_coef: 0.1
@@ -49,7 +49,7 @@ grad_from_Q: false
 grad_from_R: false
 grad_from_policy: false
 grad_from_current_R: true
-current_reward: true
+current_reward: true  #change to false
 original_tdmpc2_implementation: false
 
 # misc
@@ -57,7 +57,7 @@ compile: false
 save_video: false
 save_agent: true
 seed: 2022
-monitor_freq: 6_000
+monitor_freq: 2000  #6000
 dim_monitor_steps: 30_000
 full_rank: false
 simnorm: false

@@ -1,0 +1,32 @@
+{
+  "steps": [
+    0,
+    2000
+  ],
+  "timestamp": [
+    1755721572.2899249,
+    1755721655.3439925
+  ],
+  "avg_dis_z": [],
+  "min_dis_z": [],
+  "avg_dis_p": [],
+  "min_dis_p": [],
+  "est_dim_avg": [],
+  "est_dim_min": [],
+  "est_dim_p_avg": [],
+  "est_dim_p_min": [],
+  "encoding_space_size": [
+    94.5910415649414,
+    0.5177559852600098
+  ],
+  "lipschitz_K": [],
+  "decoder_loss": [
+    0.9203809499740601,
+    0.034988872706890106
+  ],
+  "cluster_acc": [
+    0.33203125,
+    0.41796875
+  ],
+  "action_dist_plot_saved": []
+}

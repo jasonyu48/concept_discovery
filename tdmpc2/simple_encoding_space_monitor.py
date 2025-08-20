@@ -129,7 +129,7 @@ class SimpleEncodingSpaceMonitor:
         
         # Sample baseline observations from saved data
         self.baseline_observations = None
-        self.baseline_encodings = None
+        self.baseline_encodings = None ###
         self.baseline_labels = None  # ground-truth object counts when available
         if hasattr(self.env, 'count'):
             self._generate_baseline_observations_fallback()
@@ -544,6 +544,9 @@ class SimpleEncodingSpaceMonitor:
             if dim_metrics:
                 metrics.update(dim_metrics)
         
+        # Capture previous best before any plotting might update it
+        prev_best_cluster_acc = getattr(self, 'best_cluster_acc', float('-inf'))
+
         # Auto-save periodically and generate updated plots
         if step % (self.monitor_freq * 1) == 0:   # <------------
             self.save_monitoring_data()
@@ -573,6 +576,15 @@ class SimpleEncodingSpaceMonitor:
         # Save model periodically to same path (every 5 monitoring steps)
         if step % (self.monitor_freq * 5) == 0:
             self._save_model_checkpoint(step)
+
+        # If cluster accuracy improves over previous best, save artifacts immediately
+        if cluster_acc_computed is not None:
+            try:
+                best_cmp = float(cluster_acc_computed)
+                if best_cmp > prev_best_cluster_acc:
+                    self._on_new_best_cluster_acc(step, best_cmp)
+            except Exception as e:
+                print(f"   ⚠️ Failed to save artifacts on new best cluster acc: {e}")
 
         self.agent.model.train()
         self.encoder.train()
@@ -634,6 +646,52 @@ class SimpleEncodingSpaceMonitor:
 
         except Exception as e:
             print(f"   ⚠️ Failed to save model checkpoint: {e}")
+
+    def _save_best_model_checkpoint(self, step: int):
+        """Save/overwrite a BEST checkpoint at a fixed path for cluster accuracy best."""
+        try:
+            models_dir = self.save_dir / "models"
+            models_dir.mkdir(exist_ok=True)
+            checkpoint_path = models_dir / "best_checkpoint.pt"
+            self.agent.save(checkpoint_path)
+            print(f"   🏅 Saved BEST agent checkpoint to {checkpoint_path}")
+        except Exception as e:
+            print(f"   ⚠️ Failed to save BEST model checkpoint: {e}")
+
+    def _save_baseline_encodings_snapshot(self, step: int):
+        """Save/overwrite current baseline encodings tensor at a fixed path."""
+        try:
+            enc_dir = self.save_dir / "baseline_encodings"
+            enc_dir.mkdir(exist_ok=True)
+            out_path = enc_dir / "baseline_encodings_best.pt"
+            payload = {
+                'step': int(step),
+                'timestamp': float(time.time()),
+                'encodings': self.baseline_encodings.detach().cpu(),
+            }
+            torch.save(payload, out_path)
+            print(f"   💾 Saved baseline encodings snapshot to {out_path}")
+        except Exception as e:
+            print(f"   ⚠️ Failed to save baseline encodings snapshot: {e}")
+
+    def _on_new_best_cluster_acc(self, step: int, acc: float):
+        """Handle actions when a new best cluster accuracy is achieved."""
+        print(f"   🏆 New BEST cluster accuracy {acc*100:.2f}% at step {step} — saving artifacts...")
+        # Save decoder GIFs (if decoder enabled)
+        try:
+            # Use fixed suffix 'best' so new best overwrites previous best GIFs
+            self.save_decoder_gifs(num_gifs=getattr(self.cfg, 'num_best_gifs', 5), step="best")
+        except Exception as e:
+            print(f"   ⚠️ Failed to save decoder GIFs on best: {e}")
+
+        # Save baseline encodings snapshot
+        self._save_baseline_encodings_snapshot(step)
+
+        # Save a best-tagged model checkpoint
+        self._save_best_model_checkpoint(step)
+
+        # Update in-memory best
+        self.best_cluster_acc = float(acc)
 
     
     def plot_monitoring_curves(self, save_plot: bool = True):
@@ -769,7 +827,7 @@ class SimpleEncodingSpaceMonitor:
             return False
         if isinstance(cluster_acc, torch.Tensor):
             cluster_acc = float(cluster_acc.item())
-        return cluster_acc >= 0.97 and self.buffer is not None and self.buffer.num_eps > 0 # <------------
+        return cluster_acc >= 1.1 and self.buffer is not None and self.buffer.num_eps > 0 # <------------
 
     def _plot_action_distribution_heatmap(self, step: int):
         """Generate a heatmap of action distributions for up to 11 observation types (counts).
@@ -965,7 +1023,11 @@ class SimpleEncodingSpaceMonitor:
     # Public API: save multiple decoder GIFs after training
     # -------------------------------------------------------------
     def save_decoder_gifs(self, num_gifs = 5, step = None):
-        """Generate *num_gifs* comparison GIFs between original RGB stack and decoder output.
+        """Generate visual comparisons between original and decoder outputs.
+
+        - In counting environments (env has attribute 'count'), save JPG images with a vertical
+          separator between original and reconstruction instead of animated GIFs.
+        - Otherwise, save animated GIFs as before.
 
         Args:
             num_gifs: number of different observations to visualise (default 5).
@@ -999,42 +1061,100 @@ class SimpleEncodingSpaceMonitor:
             recon_all = dec(enc_all).detach().cpu()
         dec.train(prev_mode)
 
+        is_counting_env = hasattr(self.env, 'count')
         for idx in range(n):
             obs0 = obs_all[idx]
             recon0 = recon_all[idx]
             C, H, W = obs0.shape
             num_frames = C // 3
-            frames = []
-            for f in range(num_frames):
+
+            if is_counting_env:
+                # In counting env, save two separate JPGs: original and reconstruction
+                f = 0  # use the first frame for static visualization
                 orig = obs0[f*3:(f+1)*3].numpy().astype(np.float32)
                 rec = recon0[f*3:(f+1)*3].numpy().astype(np.float32)
                 orig_img = np.transpose(orig, (1, 2, 0))
                 rec_img = np.transpose(rec, (1, 2, 0))
-                omin, omax = orig_img.min(), orig_img.max()
-                orig_img = (orig_img - omin) / (omax - omin + 1e-8)
+                # Original: no normalization; map to uint8 based on value range
+                if orig_img.dtype != np.uint8:
+                    if float(orig_img.max()) <= 1.0 + 1e-6:
+                        orig_uint8 = np.clip(orig_img * 255.0, 0, 255).astype(np.uint8)
+                    else:
+                        orig_uint8 = np.clip(orig_img, 0, 255).astype(np.uint8)
+                else:
+                    orig_uint8 = orig_img
+                # Reconstruction: map from [-1,1] -> [0,1]
                 rec_img = (rec_img + 1.0) / 2.0
                 rec_img = np.clip(rec_img, 0.0, 1.0)
-                # Optionally re-normalize reconstructed image to improve visibility
                 if getattr(self.cfg, 'better_decoder_image', False):
                     rmin, rmax = rec_img.min(), rec_img.max()
                     if rmax > rmin:
                         rec_img = (rec_img - rmin) / (rmax - rmin + 1e-8)
-                comb = np.concatenate([orig_img, rec_img], axis=1)
-                comb_uint8 = (comb * 255).astype(np.uint8)
+                rec_uint8 = (rec_img * 255.0).astype(np.uint8)
+                # Scale if requested
                 scale = getattr(self.cfg, 'gif_scale', 4)
                 if scale and scale > 1:
-                    pil_img = Image.fromarray(comb_uint8)
-                    pil_img = pil_img.resize((pil_img.width * scale, pil_img.height * scale), resample=Image.NEAREST)
-                    comb_uint8 = np.array(pil_img)
-                frames.append(comb_uint8)
+                    o_pil = Image.fromarray(orig_uint8)
+                    o_pil = o_pil.resize((o_pil.width * scale, o_pil.height * scale), resample=Image.NEAREST)
+                    orig_uint8 = np.array(o_pil)
+                    r_pil = Image.fromarray(rec_uint8)
+                    r_pil = r_pil.resize((r_pil.width * scale, r_pil.height * scale), resample=Image.NEAREST)
+                    rec_uint8 = np.array(r_pil)
+                suffix = f"{step}" if step is not None else "final"
+                jpg_path_orig = gif_dir / f"decoder_cmp_{idx}_{suffix}_original_observation.jpg"
+                jpg_path_rec = gif_dir / f"decoder_cmp_{idx}_{suffix}_reconstruction.jpg"
+                try:
+                    Image.fromarray(orig_uint8).save(str(jpg_path_orig), format='JPEG', quality=95)
+                    Image.fromarray(rec_uint8).save(str(jpg_path_rec), format='JPEG', quality=95)
+                    print(f"   🖼️  Saved decoder images → {jpg_path_orig} and {jpg_path_rec}")
+                except Exception as e:
+                    print(f"⚠️ Failed to save JPGs {jpg_path_orig} / {jpg_path_rec}: {e}")
+            else:
+                # Non-counting env: save animated GIF with all frames
+                frames = []
+                for f in range(num_frames):
+                    orig = obs0[f*3:(f+1)*3].numpy().astype(np.float32)
+                    rec = recon0[f*3:(f+1)*3].numpy().astype(np.float32)
+                    orig_img = np.transpose(orig, (1, 2, 0))
+                    rec_img = np.transpose(rec, (1, 2, 0))
+                    # Original: no normalization; map to uint8
+                    if orig_img.dtype != np.uint8:
+                        if float(orig_img.max()) <= 1.0 + 1e-6:
+                            orig_uint8 = np.clip(orig_img * 255.0, 0, 255).astype(np.uint8)
+                        else:
+                            orig_uint8 = np.clip(orig_img, 0, 255).astype(np.uint8)
+                    else:
+                        orig_uint8 = orig_img
+                    # Reconstruction: [-1,1] -> [0,1] -> uint8
+                    rec_img = (rec_img + 1.0) / 2.0
+                    rec_img = np.clip(rec_img, 0.0, 1.0)
+                    if getattr(self.cfg, 'better_decoder_image', False):
+                        rmin, rmax = rec_img.min(), rec_img.max()
+                        if rmax > rmin:
+                            rec_img = (rec_img - rmin) / (rmax - rmin + 1e-8)
+                    rec_uint8 = (rec_img * 255.0).astype(np.uint8)
+                    # Optional scale
+                    scale = getattr(self.cfg, 'gif_scale', 4)
+                    if scale and scale > 1:
+                        o_pil = Image.fromarray(orig_uint8)
+                        o_pil = o_pil.resize((o_pil.width * scale, o_pil.height * scale), resample=Image.NEAREST)
+                        orig_uint8 = np.array(o_pil)
+                        r_pil = Image.fromarray(rec_uint8)
+                        r_pil = r_pil.resize((r_pil.width * scale, r_pil.height * scale), resample=Image.NEAREST)
+                        rec_uint8 = np.array(r_pil)
+                    # Combine with vertical separator
+                    sep_w = 3
+                    separator = np.zeros((orig_uint8.shape[0], sep_w, 3), dtype=np.uint8)
+                    comb_uint8 = np.concatenate([orig_uint8, separator, rec_uint8], axis=1)
+                    frames.append(comb_uint8)
 
-            suffix = f"{step}" if step is not None else "final"
-            gif_path = gif_dir / f"decoder_cmp_{idx}_{suffix}.gif"
-            try:
-                imageio.mimsave(str(gif_path), frames, fps=2)
-                print(f"   🎞️  Saved decoder GIF → {gif_path}")
-            except Exception as e:
-                print(f"⚠️ Failed to save GIF {gif_path}: {e}")
+                suffix = f"{step}" if step is not None else "final"
+                gif_path = gif_dir / f"decoder_cmp_{idx}_{suffix}.gif"
+                try:
+                    imageio.mimsave(str(gif_path), frames, fps=2)
+                    print(f"   🎞️  Saved decoder GIF → {gif_path}")
+                except Exception as e:
+                    print(f"⚠️ Failed to save GIF {gif_path}: {e}")
 
         return gif_dir
 
