@@ -63,9 +63,9 @@ class RandomLinear(nn.Module):
 		self.eval()
 		
 	def forward(self, x: torch.Tensor) -> torch.Tensor:
-		# x is of shape (*, 9, 64, 64)
-		# we want to flatten the last three dimensions
-		x = x.reshape(-1, 9*64*64)
+		# x is of shape (N, C, H, W); flatten per-sample dynamically
+		N = x.shape[0]
+		x = x.reshape(N, -1)
 		return self.proj(x)*self.scale_factor
 
 
@@ -137,8 +137,10 @@ class WorldModel(nn.Module):
 		if getattr(cfg, 'collapse_prevention', False):
 			self._collapse_pred = layers.mlp(cfg.latent_dim, 2*[cfg.mlp_dim], cfg.collapse_prevention_dim)
 			in_channels = cfg.obs_shape['rgb'][0] if 'rgb' in cfg.obs_shape else cfg.obs_shape['state'][0]
+			in_h = cfg.obs_shape['rgb'][1] if 'rgb' in cfg.obs_shape else cfg.obs_shape['state'][1]
+			in_w = cfg.obs_shape['rgb'][2] if 'rgb' in cfg.obs_shape else cfg.obs_shape['state'][2]
 			if cfg.collapse_prevention_network == 'linear':
-				self._random_fn = RandomLinear(cfg, 9*64*64, cfg.collapse_prevention_dim)
+				self._random_fn = RandomLinear(cfg, in_channels*in_h*in_w, cfg.collapse_prevention_dim)
 			elif cfg.collapse_prevention_network == 'transformer':
 				self._random_fn = RandomPatchTransformer(cfg, in_channels, patch_size=8, d_model=cfg.collapse_prevention_dim)
 			else:

@@ -18,7 +18,7 @@ eval_episodes: 10
 eval_freq: 6_000
 
 # training
-steps: 2000       #300_000
+steps: 300_000    #300_000
 batch_size: 256
 reward_coef: 2
 value_coef: 0.1
@@ -26,7 +26,7 @@ termination_coef: 1
 consistency_coef: 2
 pi_coef: 0.11
 shrink_coef: 0.0 # harmful, do not use
-collapse_prevention: false  # enable/disable random phenomenon function 
+collapse_prevention: true  # enable/disable random phenomenon function 
 collapse_prevention_dim: 256
 collapse_prevention_network: linear
 collapse_prevention_coef: 1
@@ -48,8 +48,8 @@ JEPA_sg: false
 grad_from_Q: false
 grad_from_R: false
 grad_from_policy: false
-grad_from_current_R: true
-current_reward: true  #change to false
+grad_from_current_R: false
+current_reward: false  #change to false
 original_tdmpc2_implementation: false
 
 # misc
@@ -57,7 +57,7 @@ compile: false
 save_video: false
 save_agent: true
 seed: 2022
-monitor_freq: 2000  #6000
+monitor_freq: 6000  #6000
 dim_monitor_steps: 30_000
 full_rank: false
 simnorm: false
