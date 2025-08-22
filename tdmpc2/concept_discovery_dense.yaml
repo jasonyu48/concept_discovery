@@ -1,0 +1,147 @@
+defaults:
+    - override hydra/launcher: submitit_local
+    - _self_
+
+# environment
+task: counting4
+discrete_action: false
+action_dim: 1
+obs: rgb
+episodic: true
+two_actions: true
+reward_mode: dense_reward  #dense_reward
+terminate_on_success: true
+
+# evaluation
+checkpoint: ???
+eval_episodes: 10
+eval_freq: 6_000
+
+# training
+steps: 300_000    #300_000
+batch_size: 256
+reward_coef: 2
+value_coef: 0.1
+termination_coef: 1
+consistency_coef: 2
+pi_coef: 0.11
+shrink_coef: 0.0 # harmful, do not use
+collapse_prevention: false  # enable/disable random phenomenon function 
+collapse_prevention_dim: 256
+collapse_prevention_network: linear
+collapse_prevention_coef: 1
+scale_factor: 1.0
+rho: 0.5
+lr: 3e-4 #was 3e-4
+enc_lr_scale: 0.3
+grad_clip_norm: 200
+tau: 0.01
+discount_denom: 5
+discount_min: 0.95
+discount_max: 0.995
+buffer_size: 100_000
+q_sample_ratio: 1.0  # Ratio of buffer data visible to Q-function and collapse prevention training (0.0-1.0)
+exp_name: concept_discovery_two_actions_final_more_explore_8_grace2
+train_print_freq: 100  # print training episodes every 100 episodes instead of every episode
+data_dir: ???
+JEPA_sg: false
+grad_from_Q: false
+grad_from_R: false
+grad_from_policy: false
+grad_from_current_R: true
+current_reward: true  #change to false
+original_tdmpc2_implementation: false
+
+# misc
+compile: false
+save_video: false
+save_agent: true
+seed: 2022
+monitor_freq: 6000  #6000
+dim_monitor_steps: 30_000
+full_rank: false
+simnorm: false
+simnorm_dim: 8
+save_obs_for_rankme: false
+rankme_samples: 30_000
+enable_decoder: true
+
+monitor_rankme: false
+monitor_eval_reward: true
+monitor_jacobian_rank: false
+monitor_encoding_space: true # measures the average pairwise distance of baseline encodings
+monitor_cluster_acc: true
+monitor_bounds: false
+
+# planning
+mpc: true
+iterations: 6
+num_samples: 512
+num_elites: 64
+num_pi_trajs: 24
+horizon: 1
+min_std: 0.05
+max_std: 2
+temperature: 0.5
+random_action_selection: true  # Use uniform random action selection during training
+
+# actor
+log_std_min: -10
+log_std_max: 2
+entropy_coef: 1e-4
+
+# critic
+num_bins: 101
+vmin: -10
+vmax: +10
+
+# architecture
+model_size: ???
+encoder_arch: resnet
+num_enc_layers: 3
+enc_dim: 512
+enc_layernorm: false
+enc_shiftaug: false
+num_channels: 32
+mlp_dim: 512
+latent_dim: 256
+resnet_blocks: 8
+dynamics_arch: mlp
+dyn_dims: 512
+iresnet_C: 2.0         # Lipschitz constant C for i-ResNet
+simple_dynamics: false  # linear g if true
+collapsed_encoder_init: false  # initialise RGB MLP encoder in collapsed mode
+task_dim: 96
+num_q: 1
+dropout: 0.01
+
+# logging
+wandb_project: ???
+wandb_entity: ???
+wandb_silent: false
+enable_wandb: false
+save_csv: true
+better_decoder_image: true
+
+# convenience
+work_dir: ???
+task_title: ???
+multitask: ???
+tasks: ???
+obs_shape: {rgb: [3, 64, 64]}
+episode_length: 4
+obs_shapes: ???
+action_dims: ???
+episode_lengths: ???
+seed_steps: ???
+bin_size: ???
+
+# Hydra configuration to organize outputs by experiment name
+hydra:
+  job:
+    chdir: false  # Don't change directory automatically
+  run:
+    dir: ./tdmpc2/logs/${task}/${seed}/${exp_name}  # Use same structure as work_dir
+  sweep:
+    dir: ./tdmpc2/logs/${task}
+    subdir: ${seed}/${exp_name}
