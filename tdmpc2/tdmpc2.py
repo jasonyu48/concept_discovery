@@ -385,7 +385,19 @@ class TDMPC2(torch.nn.Module):
 		consistency_loss = 0
 		for t, (_action, _next_z) in enumerate(zip(action.unbind(0), next_z.unbind(0))):
 			z = self.model.next(z, _action, task)
-			consistency_loss = consistency_loss + F.mse_loss(z, _next_z) * self.cfg.rho**t
+			# Consistency loss gradient control:
+			# - When grad_from_dynamics is True: allow gradients to flow through the
+			#   predicted latent (current) and optionally into the encoder for _next_z
+			#   unless JEPA_sg is enabled (which always stop-grads next encodings).
+			# - When grad_from_dynamics is False: block gradients from the consistency
+			#   loss to both the current (predicted) latent and the t+1 encoder output.
+			if self.cfg.grad_from_dynamics:
+				z_cons = z
+				next_z_cons = _next_z if not self.cfg.JEPA_sg else _next_z.detach()
+			else:
+				z_cons = z.detach()
+				next_z_cons = _next_z.detach()
+			consistency_loss = consistency_loss + F.mse_loss(z_cons, next_z_cons) * self.cfg.rho**t
 			zs[t+1] = z
 
 		# Predictions
