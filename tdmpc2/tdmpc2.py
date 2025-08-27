@@ -580,4 +580,19 @@ class TDMPC2(torch.nn.Module):
 		# Log metric
 		update_info["q_visible_percent"] = torch.tensor(visible_percent, device=self.device)
 
+		# Append reward/consistency losses to train.csv
+		try:
+			work_dir = getattr(self.cfg, 'work_dir', '.')
+			train_csv = Path(work_dir) / 'train.csv'
+			if not train_csv.exists():
+				train_csv.parent.mkdir(parents=True, exist_ok=True)
+				with open(train_csv, 'w') as f:
+					f.write('step,reward_loss,consistency_loss\n')
+			rl = float(update_info["reward_loss"].detach().cpu().item()) if hasattr(update_info["reward_loss"], 'item') else float(update_info["reward_loss"]) 
+			cl = float(update_info["consistency_loss"].detach().cpu().item()) if hasattr(update_info["consistency_loss"], 'item') else float(update_info["consistency_loss"]) 
+			with open(train_csv, 'a') as f:
+				f.write(f'{int(step)},{rl:.8f},{cl:.8f}\n')
+		except Exception as e:
+			print(f"⚠️ Failed to write train.csv: {e}")
+
 		return update_info
