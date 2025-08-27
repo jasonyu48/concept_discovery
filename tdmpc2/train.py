@@ -23,7 +23,7 @@ if torch.cuda.is_available():
 torch.set_float32_matmul_precision('high')
 
 
-@hydra.main(config_name='concept_discovery', config_path='.', version_base=None)
+@hydra.main(config_name='concept_discovery_no_phenomenon', config_path='.', version_base=None)
 def train(cfg: dict):
 	"""
 	Script for training single-task / multi-task TD-MPC2 agents.

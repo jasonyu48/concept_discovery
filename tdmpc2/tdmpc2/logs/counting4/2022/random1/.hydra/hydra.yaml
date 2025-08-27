@@ -128,7 +128,7 @@ hydra:
     override_dirname: exp_name=random1
     id: ???
     num: ???
-    config_name: concept_discovery
+    config_name: concept_discovery_random
     env_set: {}
     env_copy: []
     config:

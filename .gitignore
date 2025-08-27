@@ -136,3 +136,5 @@ dmypy.json
 dummy_rankme_obs.pt
 
 old_version*
+
+*logs*
