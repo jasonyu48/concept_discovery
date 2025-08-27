@@ -201,11 +201,38 @@ class WorldModel(nn.Module):
 	def __repr__(self):
 		repr = 'TD-MPC2 World Model\n'
 		modules = ['Encoder', 'Dynamics', 'Reward', 'Termination', 'Policy prior', 'Q-functions']
-		for i, m in enumerate([self._encoder, self._dynamics, self._reward, self._termination, self._pi, self._Qs]):
+		module_objs = [self._encoder, self._dynamics, self._reward, self._termination, self._pi, self._Qs]
+		for name, m in zip(modules, module_objs):
 			if m == self._termination and not self.cfg.episodic:
 				continue
-			repr += f"{modules[i]}: {m}\n"
+			repr += f"{name}: {m}\n"
+		# Optionally include current-reward head in the printed architecture
+		if getattr(self.cfg, 'current_reward', False) and getattr(self, '_reward_current', None) is not None:
+			repr += f"Current reward: {self._reward_current}\n"
+		# Total params
 		repr += "Learnable parameters: {:,}".format(self.total_params)
+		# Per-module parameter breakdown
+		def count_params(module):
+			return 0 if module is None else sum(p.numel() for p in module.parameters() if p.requires_grad)
+		param_breakdown = []
+		param_breakdown.append(("Encoder", count_params(self._encoder)))
+		param_breakdown.append(("Dynamics", count_params(self._dynamics)))
+		param_breakdown.append(("Reward", count_params(self._reward)))
+		if getattr(self.cfg, 'current_reward', False) and getattr(self, '_reward_current', None) is not None:
+			param_breakdown.append(("Current reward", count_params(self._reward_current)))
+		if self.cfg.episodic:
+			param_breakdown.append(("Termination", count_params(self._termination)))
+		param_breakdown.append(("Policy prior", count_params(self._pi)))
+		param_breakdown.append(("Q-functions", count_params(self._Qs)))
+		if getattr(self.cfg, 'multitask', False):
+			param_breakdown.append(("Task embedding", count_params(self._task_emb)))
+		if getattr(self.cfg, 'enable_decoder', True) and getattr(self, '_decoder', None) is not None:
+			param_breakdown.append(("Decoder", count_params(self._decoder)))
+		if getattr(self.cfg, 'collapse_prevention', False) and getattr(self, '_collapse_pred', None) is not None:
+			param_breakdown.append(("Collapse prevention", count_params(self._collapse_pred)))
+		repr += "\nParameter breakdown:"
+		for name, n in param_breakdown:
+			repr += f"\n{name}: {n:,}"
 		# add a comparison of the number of parameters of the frozen transformer vs encoder and _collapse_pred
 		if self.cfg.collapse_prevention:
 			frozen_params = sum(p.numel() for p in self._random_fn.parameters())

@@ -144,7 +144,11 @@ class OnlineTrainer(Trainer):
 				action = self.env.rand_act()
 			obs, reward, done, info = self.env.step(action)
 			# Record observation type (object count) for analysis/monitoring
-			obs_type = int(info.get('count', -1)) if isinstance(info, dict) else -1
+			# Prefer pre-action count when available to label obs_t correctly
+			if isinstance(info, dict):
+				obs_type = int(info.get('count_pre', info.get('count', -1)))
+			else:
+				obs_type = -1
 			reward_pre = float(info.get('reward_pre', float('nan')))
 			self._tds.append(self.to_td(obs, action, reward, info['terminated'], obs_type=obs_type, reward_pre=reward_pre))
 

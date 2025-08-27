@@ -695,7 +695,7 @@ class SimpleEncodingSpaceMonitor:
 
     
     def plot_monitoring_curves(self, save_plot: bool = True):
-        """Generate a 2x2 panel plot of metrics: encoding size, min rank, RankMe, eval reward, cluster accuracy."""
+        """Generate plots: encoding size, min rank, RankMe, eval reward, cluster accuracy, train losses."""
         if not self.monitoring_data['steps']:
             print("No monitoring data to plot")
             return None
@@ -803,6 +803,26 @@ class SimpleEncodingSpaceMonitor:
                 ax.grid(True, alpha=0.3)
             subplot_idx += 1
 
+        # Additional plot: training losses from train.csv (reward_loss, consistency_loss)
+        try:
+            train_csv = f"{self.cfg.work_dir}/train.csv"
+            df_train = pd.read_csv(train_csv)
+            if {'step', 'reward_loss', 'consistency_loss'}.issubset(df_train.columns):
+                # If there is no remaining subplot space, add a new figure
+                if subplot_idx == 1:
+                    plt.figure(figsize=(6, 4))
+                ax = plt.subplot(rows, cols, min(subplot_idx, rows*cols))
+                ax.plot(df_train['step'], df_train['reward_loss'], label='reward_loss', color='tab:blue')
+                ax.plot(df_train['step'], df_train['consistency_loss'], label='consistency_loss', color='tab:red')
+                ax.set_title('Training Losses', fontsize=12, fontweight='bold')
+                ax.set_xlabel('Training Steps')
+                ax.set_ylabel('Loss')
+                ax.set_ylim(0.0, 0.01)
+                ax.grid(True, alpha=0.3)
+                ax.legend()
+        except Exception as e:
+            print(f"⚠️ Could not plot training losses: {e}")
+
         plt.tight_layout()
 
         if save_plot:
@@ -827,7 +847,7 @@ class SimpleEncodingSpaceMonitor:
             return False
         if isinstance(cluster_acc, torch.Tensor):
             cluster_acc = float(cluster_acc.item())
-        return cluster_acc >= 1.1 and self.buffer is not None and self.buffer.num_eps > 0 # <------------
+        return cluster_acc >= 2 and self.buffer is not None and self.buffer.num_eps > 0 # <------------ disabled heatmap
 
     def _plot_action_distribution_heatmap(self, step: int):
         """Generate a heatmap of action distributions for up to 11 observation types (counts).
