@@ -51,7 +51,7 @@ grad_from_policy: false
 grad_from_current_R: true
 current_reward: true
 original_tdmpc2_implementation: false
-grad_from_dynamics: true
+grad_from_dynamics: false
 
 # misc
 compile: false
