@@ -32,8 +32,8 @@ collapse_prevention_network: linear
 collapse_prevention_coef: 1
 scale_factor: 1.0
 rho: 0.5
-lr: 3e-4 #was 3e-4
-enc_lr_scale: 0.3
+lr: 1.0e-05 #was 3e-4
+enc_lr_scale: 1.0
 grad_clip_norm: 200
 tau: 0.01
 discount_denom: 5
@@ -41,7 +41,7 @@ discount_min: 0.95
 discount_max: 0.995
 buffer_size: 100_000
 q_sample_ratio: 1.0  # Ratio of buffer data visible to Q-function and collapse prevention training (0.0-1.0)
-exp_name: RO7
+exp_name: OR6
 train_print_freq: 100  # print training episodes every 100 episodes instead of every episode
 data_dir: ???
 JEPA_sg: true
