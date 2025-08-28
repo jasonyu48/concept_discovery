@@ -209,6 +209,9 @@ class WorldModel(nn.Module):
 		# Optionally include current-reward head in the printed architecture
 		if getattr(self.cfg, 'current_reward', False) and getattr(self, '_reward_current', None) is not None:
 			repr += f"Current reward: {self._reward_current}\n"
+		# Also include decoder architecture if enabled
+		if getattr(self.cfg, 'enable_decoder', True) and getattr(self, '_decoder', None) is not None:
+			repr += f"Decoder: {self._decoder}\n"
 		# Total params
 		repr += "Learnable parameters: {:,}".format(self.total_params)
 		# Per-module parameter breakdown
@@ -233,17 +236,6 @@ class WorldModel(nn.Module):
 		repr += "\nParameter breakdown:"
 		for name, n in param_breakdown:
 			repr += f"\n{name}: {n:,}"
-		# add a comparison of the number of parameters of the frozen transformer vs encoder and _collapse_pred
-		if self.cfg.collapse_prevention:
-			frozen_params = sum(p.numel() for p in self._random_fn.parameters())
-			encoder_params = sum(p.numel() for p in self._encoder.parameters())
-			collapse_params = sum(p.numel() for p in self._collapse_pred.parameters())
-			repr += f"\nFrozen {self.cfg.collapse_prevention_network} params: {frozen_params:,}"
-			repr += f"\nEncoder + collapse_pred params: {encoder_params + collapse_params:,}"
-			if encoder_params + collapse_params < frozen_params:
-				repr += f"\n❌ encoder + collapse_pred is not expressive enough"
-			else:
-				repr += f"\n✅ encoder + collapse_pred is expressive enough"
 		return repr
 
 	@property
