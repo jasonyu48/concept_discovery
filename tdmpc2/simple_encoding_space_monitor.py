@@ -668,6 +668,7 @@ class SimpleEncodingSpaceMonitor:
                 'step': int(step),
                 'timestamp': float(time.time()),
                 'encodings': self.baseline_encodings.detach().cpu(),
+                'labels': self.baseline_labels.detach().cpu() if self.baseline_labels is not None else None,
             }
             torch.save(payload, out_path)
             print(f"   💾 Saved baseline encodings snapshot to {out_path}")
