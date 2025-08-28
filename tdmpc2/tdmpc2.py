@@ -427,17 +427,21 @@ class TDMPC2(torch.nn.Module):
 				termination_pred = self.model.termination(zs[1:].detach(), task, unnormalized=True)
 
 		# Compute losses
-		reward_loss, value_loss = 0, 0
+		# Split reward loss into post-action (environment reward) and current (pre-action) components
+		reward_post_loss = torch.tensor(0.0, device=self.device)
+		reward_curr_loss = torch.tensor(0.0, device=self.device)
+		value_loss = 0
 		
 		# Use buffer-provided pre-action reward targets when current_reward is enabled
 		preaction_targets = reward_pre if getattr(self.cfg, 'current_reward', False) else None
 		for t, (rew_pred_unbind, rew_unbind, td_target_unbind, qs_unbind) in enumerate(zip(reward_preds.unbind(0), reward.unbind(0), td_targets.unbind(0), qs.unbind(1))):
-			reward_loss = reward_loss + math.soft_ce(rew_pred_unbind, rew_unbind, self.cfg).mean() * self.cfg.rho**t
+			# Post-action (environment) reward head
+			reward_post_loss = reward_post_loss + math.soft_ce(rew_pred_unbind, rew_unbind, self.cfg).mean() * self.cfg.rho**t
 			# Current reward head loss (pre-action target)
 			if reward_current_preds is not None and preaction_targets is not None:
 				rew_curr_unbind = reward_current_preds[t]
 				pre_target_unbind = preaction_targets[t]
-				reward_loss = reward_loss + math.soft_ce(rew_curr_unbind, pre_target_unbind, self.cfg).mean() * self.cfg.rho**t
+				reward_curr_loss = reward_curr_loss + math.soft_ce(rew_curr_unbind, pre_target_unbind, self.cfg).mean() * self.cfg.rho**t
 			
 			# Apply Q-function mask to value loss if available
 			for _, qs_unbind_unbind in enumerate(qs_unbind.unbind(0)):
@@ -452,7 +456,11 @@ class TDMPC2(torch.nn.Module):
 				value_loss = value_loss + q_loss * self.cfg.rho**t
 
 		consistency_loss = consistency_loss / self.cfg.horizon
-		reward_loss = reward_loss / self.cfg.horizon
+		# Normalise reward components by horizon
+		reward_post_loss = reward_post_loss / self.cfg.horizon
+		reward_curr_loss = reward_curr_loss / self.cfg.horizon
+		# Total reward loss used for optimisation (unchanged behaviour)
+		reward_loss = reward_post_loss + reward_curr_loss
 		if self.cfg.episodic:
 			termination_loss = F.binary_cross_entropy_with_logits(termination_pred, terminated)
 		else:
@@ -523,7 +531,12 @@ class TDMPC2(torch.nn.Module):
 		self.model.eval()
 		info = TensorDict({
 			"consistency_loss": consistency_loss,
-			"reward_loss": reward_loss,
+			# Log ONLY the pre-action (current) reward loss under the key 'reward_loss'
+			"reward_loss": reward_curr_loss,
+			# Expose components for debugging/analysis
+			"reward_curr_loss": reward_curr_loss,
+			"reward_post_loss": reward_post_loss,
+			"reward_total_loss": reward_loss,
 			"value_loss": value_loss,
 			"termination_loss": termination_loss,
 			"total_loss": total_loss,
