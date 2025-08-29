@@ -1,4 +1,4 @@
-## Concept Discovery on TD-MPC2
+## Why and How Auxiliary Tasks Improve JEPA Representations
 
 This repository extends TD-MPC2 for research on concept discovery under pixel observations. It focuses on world-model representation learning and analyzing the separability/interpretability of learned “concepts.” On top of TD-MPC2’s scalable world model and MPC planning, we add encoding-space monitoring, collapse prevention, visualization, and analysis utilities to study the process of concept discovery systematically.
 
