@@ -70,7 +70,7 @@ def _compute_tsne(X: np.ndarray, perplexity: float, random_state: int = 42) -> n
     return Y, adj_perp
 
 
-def _plot(Y: np.ndarray, labels: np.ndarray, out_path: Path, title: str = "t-SNE Latent Space"):
+def _plot(Y: np.ndarray, labels: np.ndarray, out_path: Path, title: str = "t-SNE Latent Space", point_size: int = 10, font_size: int = 12):
     import matplotlib.pyplot as plt
 
     labels_unique = np.unique(labels)
@@ -85,14 +85,43 @@ def _plot(Y: np.ndarray, labels: np.ndarray, out_path: Path, title: str = "t-SNE
 
     colors = [base_cmap(i % base_cmap.N) for i in range(num_classes)]
 
-    plt.figure(figsize=(6, 5))
+    plt.figure(figsize=(5, 5))
     for cls, col in zip(labels_unique, colors):
         idx = labels == cls
-        plt.scatter(Y[idx, 0], Y[idx, 1], s=10, alpha=0.85, label=str(cls), color=col)
+        plt.scatter(
+            Y[idx, 0],
+            Y[idx, 1],
+            s=point_size,
+            alpha=0.85,
+            label=str(cls),
+            color=col,
+            edgecolors='none',
+            linewidths=0.0,
+        )
 
+    ax = plt.gca()
+    # Place legend outside so it doesn't deform the axes box
     if num_classes > 1:
-        plt.legend(title="Label", fontsize=8)
-    plt.title(title)
+        ax.legend(title="Label", fontsize=font_size, title_fontsize=font_size, loc='center left', bbox_to_anchor=(1.02, 0.5), borderaxespad=0.0, frameon=False)
+
+    # Tick label font sizes
+    ax.tick_params(axis='both', which='both', labelsize=font_size)
+
+    # Enforce square axes box and equal data ranges
+    x_min, x_max = float(np.nanmin(Y[:, 0])), float(np.nanmax(Y[:, 0]))
+    y_min, y_max = float(np.nanmin(Y[:, 1])), float(np.nanmax(Y[:, 1]))
+    x_mid = 0.5 * (x_min + x_max)
+    y_mid = 0.5 * (y_min + y_max)
+    half_range = 0.5 * max(x_max - x_min, y_max - y_min)
+    if half_range <= 0:
+        half_range = 1.0
+    ax.set_xlim(x_mid - half_range, x_mid + half_range)
+    ax.set_ylim(y_mid - half_range, y_mid + half_range)
+    ax.set_aspect('equal', adjustable='box')
+    try:
+        ax.set_box_aspect(1)
+    except Exception:
+        pass
     plt.tight_layout()
     out_path.parent.mkdir(parents=True, exist_ok=True)
     plt.savefig(out_path, dpi=300)
@@ -112,7 +141,7 @@ def _compute_pca(X: np.ndarray, random_state: int = 42):
     return Y, var_ratio
 
 
-def _plot_label_sorted_distance_heatmap(X: np.ndarray, labels: np.ndarray, out_path: Path, title: str = "Label-sorted pairwise distances"):
+def _plot_label_sorted_distance_heatmap(X: np.ndarray, labels: np.ndarray, out_path: Path, title: str = "Label-sorted pairwise distances", font_size: int = 12):
     import matplotlib.pyplot as plt
 
     if X.ndim > 2:
@@ -134,20 +163,23 @@ def _plot_label_sorted_distance_heatmap(X: np.ndarray, labels: np.ndarray, out_p
     # Robust color scaling to reduce effect of outliers
     vmax = float(np.percentile(D_sorted, 99.0)) if np.isfinite(D_sorted).all() else None
 
-    plt.figure(figsize=(6, 5))
-    im = plt.imshow(D_sorted, cmap='viridis', origin='lower', interpolation='nearest', vmax=vmax)
-    plt.title(title)
-    plt.xlabel('Samples (sorted by label)')
-    plt.ylabel('Samples (sorted by label)')
+    plt.figure(figsize=(5, 5))
+    ax = plt.gca()
+    im = ax.imshow(D_sorted, cmap='viridis', origin='lower', interpolation='nearest', vmax=vmax)
+    ax.set_xlabel('')
+    ax.set_ylabel('')
 
     # Draw grid lines at class boundaries
     for idx in change_idxs:
         pos = idx + 0.5
-        plt.axhline(pos, color='white', linewidth=0.5, alpha=0.7)
-        plt.axvline(pos, color='white', linewidth=0.5, alpha=0.7)
+        ax.axhline(pos, color='red', linewidth=1.0, alpha=0.9)
+        ax.axvline(pos, color='red', linewidth=1.0, alpha=0.9)
 
-    cbar = plt.colorbar(im)
-    cbar.set_label('L2 distance')
+    ax.set_aspect('equal', adjustable='box')
+    ax.tick_params(axis='both', which='both', labelsize=font_size)
+    cbar = plt.colorbar(im, ax=ax, fraction=0.03, pad=0.02)
+    cbar.set_label('L2 distance', fontsize=font_size)
+    cbar.ax.tick_params(labelsize=font_size)
 
     plt.tight_layout()
     out_path.parent.mkdir(parents=True, exist_ok=True)
@@ -157,10 +189,10 @@ def _plot_label_sorted_distance_heatmap(X: np.ndarray, labels: np.ndarray, out_p
 
 def main():
     pjepa_path = '/home/jyu197/onlyreward/concept_discovery/tdmpc2/tdmpc2/logs/counting4/2022/final/concept_discovery_P_JEPA4/encoding_monitor/baseline_encodings/baseline_encodings_best.pt'
-    random_path = '/home/jyu197/onlyreward/concept_discovery/tdmpc2/tdmpc2/logs/counting4/2022/final/concept_discovery_random/encoding_monitor/baseline_encodings/baseline_encodings_best.pt'
+    random_path = '/home/jyu197/onlyreward/concept_discovery/tdmpc2/tdmpc2/logs/counting4/2022/final/concept_discovery_random2/encoding_monitor/baseline_encodings/baseline_encodings_best.pt'
     onlyreward_path = '/home/jyu197/onlyreward/concept_discovery/tdmpc2/tdmpc2/logs/counting4/2022/final/OR10/encoding_monitor/baseline_encodings/baseline_encodings_best.pt'
     parser = argparse.ArgumentParser(description="t-SNE of baseline encodings from snapshot .pt")
-    parser.add_argument("snapshot_path", nargs='?', type=str, default=onlyreward_path, help="Path to baseline_encodings_best.pt (optional; default used if omitted)")
+    parser.add_argument("snapshot_path", nargs='?', type=str, default=random_path, help="Path to baseline_encodings_best.pt (optional; default used if omitted)")
     parser.add_argument("perplexity", nargs='?', type=float, default=30.0, help="t-SNE perplexity (optional; default 30.0)")
     parser.add_argument("--output", type=str, default=None, help="Optional output path for the PNG plot")
     args = parser.parse_args()
@@ -200,7 +232,7 @@ def main():
         title_pca = f"PCA 2D Latent Space (explained var={total_var:.2f})"
     else:
         title_pca = "PCA 2D Latent Space"
-    _plot(Y_pca, labels_np, out_path_pca, title=title_pca)
+    _plot(Y_pca, labels_np, out_path_pca, title=title_pca, point_size=25, font_size=14)
     print(f"Saved PCA plot to {out_path_pca}")
 
     # Label-sorted pairwise distance heatmap in latent space
@@ -210,7 +242,7 @@ def main():
         suffix = f"_step{step}" if step is not None else ""
         out_name_heat = f"dist_heatmap_sorted{suffix}.png"
         out_path_heat = snap_path.parent / out_name_heat
-    _plot_label_sorted_distance_heatmap(enc_np, labels_np, out_path_heat, title="Label-sorted pairwise distances (latent)")
+    _plot_label_sorted_distance_heatmap(enc_np, labels_np, out_path_heat, title="Label-sorted pairwise distances (latent)", font_size=14)
     print(f"Saved label-sorted distance heatmap to {out_path_heat}")
 
 
