@@ -156,9 +156,9 @@ def _plot_label_sorted_distance_heatmap(X: np.ndarray, labels: np.ndarray, out_p
 
 
 def main():
-    pjepa_path = '/home/jyu197/onlyreward/concept_discovery/tdmpc2/tdmpc2/logs/counting4/2022/concept_discovery_P_JEPA4/encoding_monitor/baseline_encodings/baseline_encodings_best.pt'
-    random_path = '/home/jyu197/onlyreward/concept_discovery/tdmpc2/tdmpc2/logs/counting4/2022/concept_discovery_random/encoding_monitor/baseline_encodings/baseline_encodings_best.pt'
-    onlyreward_path = '/home/jyu197/onlyreward/concept_discovery/tdmpc2/tdmpc2/logs/counting4/2022/OR10/encoding_monitor/baseline_encodings/baseline_encodings_best.pt'
+    pjepa_path = '/home/jyu197/onlyreward/concept_discovery/tdmpc2/tdmpc2/logs/counting4/2022/final/concept_discovery_P_JEPA4/encoding_monitor/baseline_encodings/baseline_encodings_best.pt'
+    random_path = '/home/jyu197/onlyreward/concept_discovery/tdmpc2/tdmpc2/logs/counting4/2022/final/concept_discovery_random/encoding_monitor/baseline_encodings/baseline_encodings_best.pt'
+    onlyreward_path = '/home/jyu197/onlyreward/concept_discovery/tdmpc2/tdmpc2/logs/counting4/2022/final/OR10/encoding_monitor/baseline_encodings/baseline_encodings_best.pt'
     parser = argparse.ArgumentParser(description="t-SNE of baseline encodings from snapshot .pt")
     parser.add_argument("snapshot_path", nargs='?', type=str, default=onlyreward_path, help="Path to baseline_encodings_best.pt (optional; default used if omitted)")
     parser.add_argument("perplexity", nargs='?', type=float, default=30.0, help="t-SNE perplexity (optional; default 30.0)")
