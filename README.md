@@ -1,157 +1,208 @@
-<h1>TD-MPC2</span></h1>
+## Concept Discovery on TD-MPC2
 
-Official implementation of
+This repository extends TD-MPC2 for research on concept discovery under pixel observations. It focuses on world-model representation learning and analyzing the separability/interpretability of learned “concepts.” On top of TD-MPC2’s scalable world model and MPC planning, we add encoding-space monitoring, collapse prevention, visualization, and analysis utilities to study the process of concept discovery systematically.
 
-[TD-MPC2: Scalable, Robust World Models for Continuous Control](https://www.tdmpc2.com) by
+What’s included:
+- Single-task online training (primarily on a synthetic counting environment)
+- Encoding-space/dimensionality monitoring and visualization
+- Decoder reconstruction with GIF/JPG exports
+- Optional representation collapse prevention (random-phenomenon predictor)
 
-[Nicklas Hansen](https://nicklashansen.github.io), [Hao Su](https://cseweb.ucsd.edu/~haosu)\*, [Xiaolong Wang](https://xiaolonw.github.io)\* (UC San Diego)</br>
+Note: This codebase reuses TD-MPC2’s structure for core training, environments, and algorithms. Defaults, training flow, and monitoring are customized for concept discovery experiments.
 
-<img src="assets/0.gif" width="12.5%"><img src="assets/1.gif" width="12.5%"><img src="assets/2.gif" width="12.5%"><img src="assets/3.gif" width="12.5%"><img src="assets/4.gif" width="12.5%"><img src="assets/5.gif" width="12.5%"><img src="assets/6.gif" width="12.5%"><img src="assets/7.gif" width="12.5%"></br>
+### Paper (paste here)
+- Title: <paste the official title from Knowledge_Discovery.pdf>
+- Abstract: <paste abstract>
+- Keywords: <optional>
 
-[[Website]](https://www.tdmpc2.com) [[Paper]](https://arxiv.org/abs/2310.16828) [[Models]](https://www.tdmpc2.com/models)  [[Dataset]](https://www.tdmpc2.com/dataset)
+If you want me to auto-insert the title/abstract from the PDF, share the text or allow me to extract it.
 
-----
+---
 
-**Announcement (Apr 2025): support for episodic tasks!**
+## Setup and Installation
 
-We have added support for episodic RL (tasks with terminations) in the latest release. This functionality can be enabled with `episodic=true` but remains disabled by default to ensure reproducibility of results across releases.
+We recommend Conda (or Docker) for dependencies:
 
-----
-
-
-## Overview
-
-TD-MPC**2** is a scalable, robust model-based reinforcement learning algorithm. It compares favorably to existing model-free and model-based methods across **104** continuous control tasks spanning multiple domains, with a *single* set of hyperparameters (*right*). We further demonstrate the scalability of TD-MPC**2** by training a single 317M parameter agent to perform **80** tasks across multiple domains, embodiments, and action spaces (*left*). 
-
-<img src="assets/8.png" width="100%" style="max-width: 640px"><br/>
-
-This repository contains code for training and evaluating both single-task online RL and multi-task offline RL TD-MPC**2** agents. We additionally open-source **300+** [model checkpoints](https://www.tdmpc2.com/models) (including 12 multi-task models) across 4 task domains: [DMControl](https://arxiv.org/abs/1801.00690), [Meta-World](https://meta-world.github.io/), [ManiSkill2](https://maniskill2.github.io/), and [MyoSuite](https://sites.google.com/view/myosuite), as well as our [30-task and 80-task datasets](https://www.tdmpc2.com/dataset) used to train the multi-task models. Our codebase supports both state and pixel observations. We hope that this repository will serve as a useful community resource for future research on model-based RL.
-
-----
-
-## Getting started
-
-You will need a machine with a GPU and at least 12 GB of RAM for single-task online RL with TD-MPC**2**, and 128 GB of RAM for multi-task offline RL on our provided 80-task dataset. A GPU with at least 8 GB of memory is recommended for single-task online RL and for evaluation of the provided multi-task models (up to 317M parameters). Training of the 317M parameter model requires a GPU with at least 24 GB of memory.
-
-We provide a `Dockerfile` for easy installation. You can build the docker image by running
-
-```
-cd docker && docker build . -t <user>/tdmpc2:1.0.1
-```
-
-This docker image contains all dependencies needed for running DMControl. We also provide a pre-built docker image [here](https://hub.docker.com/repository/docker/nicklashansen/tdmpc2/tags/1.0.1/sha256-b07d4e04d4b28ffd9a63ac18ec1541950e874bb51d276c7d09b36135f170dd93).
-
-If you prefer to use `conda` rather than docker, start by running the following command:
-
-```
+```bash
 conda env create -f docker/environment.yaml
+conda activate tdmpc2
 ```
 
-The `docker/environment.yaml` file installs dependencies required for training on DMControl tasks. Other domains can be installed by following the instructions in `docker/environment.yaml`.
+Notes:
+- `docker/environment.yaml` pins PyTorch 2.6 nightly and TorchRL/TensorDict nightly (CUDA 12.4 by default).
+- CPU-only runs the counting environment and training but will be slow (GPU ≥ 8GB recommended).
 
-If you want to run ManiSkill2, you will additionally need to download and link the necessary assets by running
-
-```
-python -m mani_skill2.utils.download_asset all
-```
-
-which downloads assets to `./data`. You may move these assets to any location. Then, add the following line to your `~/.bashrc`:
-
-```
-export MS2_ASSET_DIR=<path>/<to>/<data>
+Optional Docker (simple):
+```bash
+docker build -f Dockerfile-simple -t tdmpc2:simple .
+# See CONFIGURATION_GUIDE.md for a convenient alias and usage examples
 ```
 
-and restart your terminal. Note that Meta-World requires MuJoCo 2.1.0 and `gym==0.21.0` which is becoming increasingly difficult to install. We host the unrestricted MuJoCo 2.1.0 license (courtesy of Google DeepMind) at [https://www.tdmpc2.com/files/mjkey.txt](https://www.tdmpc2.com/files/mjkey.txt). You can download the license by running
+---
 
+## Quickstart
+
+The root `train.py` is a wrapper that calls `tdmpc2/train.py` (Hydra configs live under `tdmpc2/`). The default training config is `concept_discovery_random.yaml`.
+
+```bash
+# Option 1: run the wrapper at the repo root (recommended)
+python train.py task=counting4 model_size=5
+
+# Option 2: call the real entrypoint directly
+python tdmpc2/train.py task=counting4 model_size=5
 ```
-wget https://www.tdmpc2.com/files/mjkey.txt -O ~/.mujoco/mjkey.txt
-```
 
-Depending on your existing system packages, you may need to install other dependencies. See `docker/Dockerfile` for a list of recommended system packages.
+Common arguments (all overridable from CLI):
+- `task`: e.g., `countingN` (such as `counting4`).
+- `model_size`: capacity hyperparameter set, one of `{1, 5, 19, 48, 317}`.
+- `steps`: training steps (default 300k).
+- `obs`: observation type, `rgb` for concept discovery.
 
-----
-
-## Supported tasks
-
-This codebase provides support for all **104** continuous control tasks from **DMControl**, **Meta-World**, **ManiSkill2**, and **MyoSuite** used in our paper. Specifically, it supports 39 tasks from DMControl (including 11 custom tasks), 50 tasks from Meta-World, 5 tasks from ManiSkill2, and 10 tasks from MyoSuite, and covers all tasks used in the paper. See below table for expected name formatting for each task domain:
-
-| domain | task
-| --- | --- |
-| dmcontrol | dog-run
-| dmcontrol | cheetah-run-backwards
-| metaworld | mw-assembly
-| metaworld | mw-pick-place-wall
-| maniskill | pick-cube
-| maniskill | pick-ycb
-| myosuite  | myo-key-turn
-| myosuite  | myo-key-turn-hard
-
-which can be run by specifying the `task` argument for `evaluation.py`. Multi-task training and evaluation is specified by setting `task=mt80` or `task=mt30` for the 80-task and 30-task sets, respectively. While you generally do not need to access the underlying task IDs or embeddings during training or evaluation of our multi-task models, the mapping from task name to task embedding used in our work can be found [here](https://github.com/nicklashansen/tdmpc2/blob/7ec6bc83a82a5188ca3faddc59aea83f430ab570/tdmpc2/common/__init__.py#L26). As of April 2025, our codebase also provides basic support for other MuJoCo/Box2d Gymnasium tasks; refer to the `envs` directory for a list of tasks. It should be relatively straightforward to add support for custom tasks by following the examples in `envs`.
-
-**Note:** we also provide support for image observations in the DMControl tasks. Use argument `obs=rgb` if you wish to train visual policies.
-
-
-## Example usage
-
-We provide examples on how to evaluate our provided TD-MPC**2** checkpoints, as well as how to train your own TD-MPC**2** agents, below.
+Outputs:
+- Logs under `tdmpc2/logs/<task>/<seed>/<exp_name>` (shared by Hydra and code).
+- Periodic eval to `eval.csv`; training snapshot rows to `train.csv`.
+- Encoding-space artifacts under `encoding_monitor/`.
 
 ### Evaluation
 
-See below examples on how to evaluate downloaded single-task and multi-task checkpoints.
+Use `tdmpc2/evaluate.py`. The script’s default config name is `config`, but this repo provides `tdmpc2/tdmpc2.yaml`. Select it via Hydra:
 
-```
-$ python evaluate.py task=mt80 model_size=48 checkpoint=/path/to/mt80-48M.pt
-$ python evaluate.py task=mt30 model_size=317 checkpoint=/path/to/mt30-317M.pt
-$ python evaluate.py task=dog-run checkpoint=/path/to/dog-1.pt save_video=true
-```
-
-All single-task checkpoints expect `model_size=5`. Multi-task checkpoints are available in multiple model sizes. Available arguments are `model_size={1, 5, 19, 48, 317}`. Note that single-task evaluation of multi-task checkpoints is currently not supported. See `config.yaml` for a full list of arguments.
-
-### Training
-
-See below examples on how to train TD-MPC**2** on a single task (online RL) and on multi-task datasets (offline RL). We recommend configuring [Weights and Biases](https://wandb.ai) (`wandb`) in `config.yaml` to track training progress.
-
-```
-$ python train.py task=mt80 model_size=48 batch_size=1024
-$ python train.py task=mt30 model_size=317 batch_size=1024
-$ python train.py task=dog-run steps=7000000
-$ python train.py task=walker-walk obs=rgb
+```bash
+python tdmpc2/evaluate.py --config-name tdmpc2 \
+  task=counting4 checkpoint=/path/to/agent.pt save_video=true
 ```
 
-We recommend using default hyperparameters for single-task online RL, including the default model size of 5M parameters (`model_size=5`). Multi-task offline RL benefits from a larger model size, but larger models are also increasingly costly to train and evaluate. Available arguments are `model_size={1, 5, 19, 48, 317}`. See `config.yaml` for a full list of arguments.
+Notes:
+- Single-task models don’t need explicit `model_size` (default is 5). Set `checkpoint` to your saved weights.
 
-----
+---
 
-## Citation
+## Concept Discovery: Features and Components
 
-If you find our work useful, please consider citing our paper as follows:
+- Encoding-space monitoring (`tdmpc2/simple_encoding_space_monitor.py`)
+  - Tracks and plots: average pairwise distance in latent space, minimum encoder-Jacobian rank (optional), RankMe (optional; requires `reptrix`), and clustering accuracy (available on the counting env).
+  - Periodically writes `monitoring_curves.png` and `monitoring_data.json`.
+  - Generates decoder comparison GIFs/JPGs under `decoder_gifs/` at the end of training.
 
+- Collapse prevention
+  - Enable via `cfg.collapse_prevention=true`. A frozen random function `_random_fn` and a predictor head `_collapse_pred` are trained with an MSE objective to discourage representation collapse.
+  - Random net options: `linear` or `transformer` (see `tdmpc2/common/world_model.py`).
+
+- Reward modeling and optional “current reward” head
+  - Standard head: `reward(z, a)` (two-hot discrete regression).
+  - Optional current-reward head: `reward_current(z)` trained on environment-provided `reward_pre` (action-independent).
+
+- Planning and policy
+  - Retains TD-MPC2’s latent-space MPPI planning (`mpc=true`).
+  - Optional training-time “random action selection” to reduce MPPI compute (`random_action_selection=true`).
+
+---
+
+## Counting Environment (CountingObjectsEnv)
+
+Location: `tdmpc2/envs/counting.py`
+- Observation: `64×64` RGB (C,H,W). Object positions vary every step; shape/color stay fixed within an episode.
+- Action:
+  - Continuous (default): scalar in [−1,1] with thresholding to decrement/increment/no-op.
+  - Discrete: one-hot (2-action or 3-action: remove/[no-op]/add).
+- Episode termination: on target match or step limit (`episode_length`).
+- Reward: sparse or dense (`reward_mode`).
+
+Quick test:
+```bash
+python train.py task=counting4 steps=10000 obs=rgb
 ```
-@inproceedings{hansen2024tdmpc2,
-  title={TD-MPC2: Scalable, Robust World Models for Continuous Control}, 
-  author={Nicklas Hansen and Hao Su and Xiaolong Wang},
-  booktitle={International Conference on Learning Representations (ICLR)},
-  year={2024}
-}
+
+---
+
+## Configurations and Common Switches
+
+Key configs under `tdmpc2/`:
+- `concept_discovery_random.yaml` (default): random action selection + collapse prevention.
+- `concept_discovery_rewardonly.yaml`: reward-only supervision; enables `current_reward`.
+- `concept_discovery_P_JEPA.yaml`: current reward + JEPA-style stop-gradient control.
+- `concept_discovery_dense.yaml`: dense reward version.
+- `concept_discovery_no_phenomenon.yaml`: collapse prevention disabled (ablation).
+
+Important hyperparameters (examples):
+- Training: `steps, batch_size, lr, eval_freq, seed`
+- Task/obs: `task, obs, episodic, discrete_action, two_actions, reward_mode`
+- Architecture: `encoder_arch, latent_dim, num_q, dynamics_arch (mlp/iresnet)`
+- Collapse prevention: `collapse_prevention, collapse_prevention_network, collapse_prevention_dim, collapse_prevention_coef`
+- Current reward: `current_reward, grad_from_current_R`
+- Planning: `mpc, iterations, num_samples, horizon, temperature`
+- Monitoring: `monitor_freq, dim_monitor_steps, monitor_encoding_space, monitor_cluster_acc, monitor_jacobian_rank, monitor_rankme`
+
+All keys are Hydra-overridable via `key=value` on the CLI.
+
+---
+
+## Visualization and Analysis Scripts
+
+Additional analysis utilities:
+- `tdmpc2/plot_encoding_metrics.py`
+  - Aggregates estimated latent dimensionality and RankMe across experiments and plots steps–cluster_acc curves.
+  - Example:
+    ```bash
+    python tdmpc2/plot_encoding_metrics.py --seed 2022 --task counting4 \
+      --results_root /path/to/tdmpc2/logs
+    ```
+
+Monitoring artifacts live under: `tdmpc2/logs/<task>/<seed>/<exp_name>/encoding_monitor/`.
+
+---
+
+## Repro Tips
+
+Configs correspond to ablations in the paper (match to your sections as needed):
+- Random actions + collapse prevention: `concept_discovery_random.yaml`
+- Reward-only (with current-reward head): `concept_discovery_rewardonly.yaml`
+- Current reward + JEPA control: `concept_discovery_P_JEPA.yaml`
+- Dense reward: `concept_discovery_dense.yaml`
+- No collapse prevention (ablation): `concept_discovery_no_phenomenon.yaml`
+
+Example:
+```bash
+python train.py --config-name concept_discovery_random task=counting4 model_size=5
 ```
-as well as the original TD-MPC paper:
+
+Note: `tdmpc2/train.py` defaults to `--config-name concept_discovery_random`, but you can set it explicitly.
+
+---
+
+## FAQ
+
+- Config for evaluation
+  - `evaluate.py` defaults to config name `config`. This repo provides `tdmpc2.yaml`. Use: `--config-name tdmpc2`.
+
+- RankMe dependency
+  - RankMe monitoring requires the `reptrix` package and a saved observation tensor (you can enable `save_obs_for_rankme` and set `rankme_obs_path`). If not installed or missing, RankMe is skipped gracefully.
+
+- Logs directory
+  - The program and Hydra share the same layout: `tdmpc2/logs/<task>/<seed>/<exp_name>`. The root `train.py` is just a wrapper and does not change paths.
+
+---
+
+## Acknowledgments and Citation
+
+This project builds on TD-MPC2. If this repository or the TD-MPC2 components are useful for your work, please also cite TD-MPC2:
+
+```text
+Hansen, N., Su, H., & Wang, X. TD-MPC2: Scalable, Robust World Models for Continuous Control. ICLR 2024.
 ```
-@inproceedings{hansen2022tdmpc,
-  title={Temporal Difference Learning for Model Predictive Control},
-  author={Nicklas Hansen and Xiaolong Wang and Hao Su},
-  booktitle={International Conference on Machine Learning (ICML)},
-  year={2022}
-}
+
+And include your own paper citation here:
+
+```text
+<Your paper BibTeX / citation entry>
 ```
 
-----
+For the original project and more background, see the TD-MPC2 website (`https://www.tdmpc2.com`).
 
-## Contributing
-
-You are very welcome to contribute to this project. Feel free to open an issue or pull request if you have any suggestions or bug reports, but please review our [guidelines](CONTRIBUTING.md) first. Our goal is to build a codebase that can easily be extended to new environments and tasks, and we would love to hear about your experience!
-
-----
+---
 
 ## License
 
-This project is licensed under the MIT License - see the `LICENSE` file for details. Note that the repository relies on third-party code, which is subject to their respective licenses.
+This project is released under the MIT License (see `LICENSE`). Third-party dependencies are subject to their respective licenses.
+
+
