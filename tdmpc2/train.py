@@ -63,7 +63,7 @@ def train(cfg: dict):
 
 	# when the user tries to overwrite existing observations, ask for confirmation
 	if cfg.save_obs_for_rankme:
-		obs_file = f"/scratch/tshu2/jyu197/obs_data/{cfg.task}/{cfg.exp_name}/observations.pt"
+		obs_file = f"/scratch//obs_data/{cfg.task}/{cfg.exp_name}/observations.pt"
 		if os.path.exists(obs_file):
 			overwrite = input(f"Observations file {obs_file} already exists. Overwrite? (y/n): ")
 			if overwrite.lower() != 'y':

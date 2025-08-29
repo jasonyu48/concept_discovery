@@ -123,7 +123,7 @@ class SimpleEncodingSpaceMonitor:
         # RankMe setup (needed for baseline observation sampling)
         # -------------------------------------------------------------
         self.rankme_samples = getattr(self.cfg, 'rankme_samples', 30000)
-        default_rankme_path = f"/scratch/tshu2/jyu197/obs_data/{getattr(self.cfg, 'task', 'unknown')}/obs/observations.pt"
+        default_rankme_path = f"/scratch//obs_data/{getattr(self.cfg, 'task', 'unknown')}/obs/observations.pt"
         self.rankme_obs_path = Path(getattr(self.cfg, 'rankme_obs_path', default_rankme_path))
         self._rankme_observations = None  # Lazy loaded
         

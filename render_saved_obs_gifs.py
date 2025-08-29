@@ -129,8 +129,8 @@ def save_gifs_from_observations(
 
 def main():
     parser = argparse.ArgumentParser(description="Render GIFs from saved observations")
-    parser.add_argument("--obs-file", type=str, default= "/scratch/tshu2/jyu197/obs_data/walker-walk/obs/observations.pt", help="Path to observations.pt file")
-    parser.add_argument("--output-dir", type=str, default="/scratch/tshu2/jyu197/obs_data/walker-walk/obs", help="Directory to write GIFs")
+    parser.add_argument("--obs-file", type=str, default= "/scratch//obs_data/walker-walk/obs/observations.pt", help="Path to observations.pt file")
+    parser.add_argument("--output-dir", type=str, default="/scratch//obs_data/walker-walk/obs", help="Directory to write GIFs")
     parser.add_argument("--max-gifs", type=int, default=10, help="Number of GIFs/images to generate")
     args = parser.parse_args()
 

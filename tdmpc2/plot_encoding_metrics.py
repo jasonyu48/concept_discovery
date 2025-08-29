@@ -6,7 +6,7 @@ Usage:
     python plot_encoding_metrics.py --seed 0
 
 The script expects the following directory structure (default results_path):
-/home/jyu197/tdmpc2/tdmpc2/logs/cheetah-run/{seed}/{exp_name}/
+/home/tdmpc2/tdmpc2/logs/cheetah-run/{seed}/{exp_name}/
     ├─ .hydra/config.yaml         # contains num_bins, q_sample_ratio, buffer_size
     ├─ encoding_monitor/monitoring_data.json  # contains lists of metrics, including
     │                                        # "est_dim_avg" and "rankme".
@@ -120,7 +120,7 @@ def _recalculate_decoder_loss(exp_path: str, cfg_path: str, task: str) -> Option
         return None
 
     # Observation tensor path – override with standard location based on task
-    eval_obs_path = f"/scratch/tshu2/jyu197/obs_data/{task}/obs/observations.pt"
+    eval_obs_path = f"/scratch//obs_data/{task}/obs/observations.pt"
     if not os.path.isfile(eval_obs_path):
         print(f"[WARN] observation file not found: {eval_obs_path}")
         return None
@@ -434,7 +434,7 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Plot encoding, decoder, and clustering metrics for a seed's experiments.")
     parser.add_argument("--seed", default=2022, help="Seed folder name")
     parser.add_argument("--task", default="counting5", help="Task name (determines results and observation paths)")
-    parser.add_argument("--results_root", default="/scratch/tshu2/jyu197/concept_discovery/tdmpc2/logs", help="Base directory that contains task subfolders")
+    parser.add_argument("--results_root", default="/scratch//concept_discovery/tdmpc2/logs", help="Base directory that contains task subfolders")
     parser.add_argument("--recalculate_decoder_loss", default='False', help="Recompute decoder loss using saved model instead of reading from monitoring data.")
     args = parser.parse_args()
 

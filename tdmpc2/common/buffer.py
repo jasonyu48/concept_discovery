@@ -48,8 +48,8 @@ class Buffer():
 		self._obs_save_limit = int(getattr(cfg, 'obs_save_max_samples', 30000))
 		if self._obs_collect_enabled:
 			from pathlib import Path
-			# Default save directory as requested: /scratch/tshu2/jyu197/obs_data/{task}/{exp_name}
-			default_dir = f"/scratch/tshu2/jyu197/obs_data/{getattr(cfg, 'task', 'unknown')}/{cfg.exp_name}"
+			# Default save directory as requested: /scratch//obs_data/{task}/{exp_name}
+			default_dir = f"/scratch//obs_data/{getattr(cfg, 'task', 'unknown')}/{cfg.exp_name}"
 			_obs_dir = Path(getattr(cfg, 'obs_save_dir', default_dir))
 			_obs_dir.mkdir(parents=True, exist_ok=True)
 			self._obs_save_path = _obs_dir / "observations.pt"

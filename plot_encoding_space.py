@@ -56,8 +56,8 @@ def plot_encoding_space_comparison():
     Plot the encoding space size and reward comparison between the two experiments.
     """
     # File paths
-    qr_log_path = "/home/jyu197/tdmpc2/tdmpc2/logs/cheetah-run/1/grad_from_Q_R_011_full_rank_rgb_no_linear_no_simnorm_size_check/log_QR.txt"
-    policy_log_path = "/home/jyu197/tdmpc2/tdmpc2/logs/cheetah-run/1/grad_from_policy_011_full_rank_rgb_no_linear_no_simnorm_size_check/log_c.txt"
+    qr_log_path = "/home/tdmpc2/tdmpc2/logs/cheetah-run/1/grad_from_Q_R_011_full_rank_rgb_no_linear_no_simnorm_size_check/log_QR.txt"
+    policy_log_path = "/home/tdmpc2/tdmpc2/logs/cheetah-run/1/grad_from_policy_011_full_rank_rgb_no_linear_no_simnorm_size_check/log_c.txt"
     
     # Extract data from both files
     qr_steps, qr_sizes, qr_rewards = extract_encoding_space_data(qr_log_path)

@@ -35,7 +35,7 @@ def plot_eval_rewards(seed):
             'marker': '^'
         },
         {
-            'path': '/home/jyu197/tdmpc2/tdmpc2/logs/cheetah-run/1/grad_from_policy_QR_011_full_rank_rgb_no_linear_no_simnorm/eval.csv',
+            'path': '/home/tdmpc2/tdmpc2/logs/cheetah-run/1/grad_from_policy_QR_011_full_rank_rgb_no_linear_no_simnorm/eval.csv',
             'label': 'grad from all',
             'color': 'y',
             'marker': '^'
@@ -44,49 +44,49 @@ def plot_eval_rewards(seed):
     
     experiments_s2015 = [
         {
-            'path': '/home/jyu197/tdmpc2/tdmpc2/logs/cheetah-run/2015/default_rgb_no_linear_seed2015/eval.csv',
+            'path': '/home/tdmpc2/tdmpc2/logs/cheetah-run/2015/default_rgb_no_linear_seed2015/eval.csv',
             'label': 'tdmpc2',
             'color': 'g',
             'marker': 's'
         },
         {
-            'path': '/home/jyu197/tdmpc2/tdmpc2/logs/cheetah-run/2015/DefaulT/eval.csv',
+            'path': '/home/tdmpc2/tdmpc2/logs/cheetah-run/2015/DefaulT/eval.csv',
             'label': 'tdmpc2 (another run)',
             'color': 'g',
             'marker': 'p'
         },
         {
-            'path': '/home/jyu197/tdmpc2/tdmpc2/logs/cheetah-run/2015/grad_from_Q_R_011_full_rank_rgb_no_linear_no_simnorm_seed2015/eval.csv',
+            'path': '/home/tdmpc2/tdmpc2/logs/cheetah-run/2015/grad_from_Q_R_011_full_rank_rgb_no_linear_no_simnorm_seed2015/eval.csv',
             'label': 'grad from Q R',
             'color': 'b',
             'marker': 's'
         },
         {
-            'path': '/home/jyu197/tdmpc2/tdmpc2/logs/cheetah-run/2015/GradFromQR_full_rank_rgb_no_linear_no_simnorm/eval.csv',
+            'path': '/home/tdmpc2/tdmpc2/logs/cheetah-run/2015/GradFromQR_full_rank_rgb_no_linear_no_simnorm/eval.csv',
             'label': 'grad from QR (another run)',
             'color': 'b',
             'marker': '^'
         },
         {
-            'path': '/home/jyu197/tdmpc2/tdmpc2/logs/cheetah-run/2015/grad_from_Q_R_011_rgb_no_linear_no_simnorm_seed2015/eval.csv',
+            'path': '/home/tdmpc2/tdmpc2/logs/cheetah-run/2015/grad_from_Q_R_011_rgb_no_linear_no_simnorm_seed2015/eval.csv',
             'label': 'grad from Q R no LU',
             'color': 'b',
             'marker': 'o'
         },
         # {
-        #     'path': '/home/jyu197/tdmpc2/tdmpc2/logs/cheetah-run/2015/grad_from_Q_R_1_full_rank_rgb_no_linear_no_simnorm_seed2015/eval.csv',
+        #     'path': '/home/tdmpc2/tdmpc2/logs/cheetah-run/2015/grad_from_Q_R_1_full_rank_rgb_no_linear_no_simnorm_seed2015/eval.csv',
         #     'label': 'grad from Q R (different grad weight)',
         #     'color': 'b',
         #     'marker': 'p'
         # },
         {
-            'path': '/home/jyu197/tdmpc2/tdmpc2/logs/cheetah-run/2015/GradFromBoth_full_rank_rgb_no_linear_no_simnorm/eval.csv',
+            'path': '/home/tdmpc2/tdmpc2/logs/cheetah-run/2015/GradFromBoth_full_rank_rgb_no_linear_no_simnorm/eval.csv',
             'label': 'grad from all',
             'color': 'y',
             'marker': '^'
         },
         {
-            'path': '/home/jyu197/tdmpc2/tdmpc2/logs/cheetah-run/2015/GradFromPolicy_full_rank_rgb_no_linear_no_simnorm_fr_reg/eval.csv',
+            'path': '/home/tdmpc2/tdmpc2/logs/cheetah-run/2015/GradFromPolicy_full_rank_rgb_no_linear_no_simnorm_fr_reg/eval.csv',
             'label': 'grad from policy (with regularization)',
             'color': 'r',
             'marker': '^'
@@ -95,25 +95,25 @@ def plot_eval_rewards(seed):
 
     experiments_s2016 = [
         {
-            'path': '/home/jyu197/tdmpc2/tdmpc2/logs/cheetah-run/2016/Default_True/eval.csv',
+            'path': '/home/tdmpc2/tdmpc2/logs/cheetah-run/2016/Default_True/eval.csv',
             'label': 'tdmpc2',
             'color': 'g',
             'marker': 's'
         },
         {
-            'path': '/home/jyu197/tdmpc2/tdmpc2/logs/cheetah-run/2016/GradFromQR_rgb_no_linear_no_simnorm/eval.csv',
+            'path': '/home/tdmpc2/tdmpc2/logs/cheetah-run/2016/GradFromQR_rgb_no_linear_no_simnorm/eval.csv',
             'label': 'grad from Q R',
             'color': 'b',
             'marker': 's'
         },
         {
-            'path': '/home/jyu197/tdmpc2/tdmpc2/logs/cheetah-run/2016/GradFromPolicy_full_rank_rgb_no_linear_no_simnorm2_fr_reg_strong2/eval.csv',
+            'path': '/home/tdmpc2/tdmpc2/logs/cheetah-run/2016/GradFromPolicy_full_rank_rgb_no_linear_no_simnorm2_fr_reg_strong2/eval.csv',
             'label': 'grad from policy (with regularization)',
             'color': 'r',
             'marker': '^'
         },
         {
-            'path': '/home/jyu197/tdmpc2/tdmpc2/logs/cheetah-run/2016/GradFromBoth_full_rank_rgb_no_linear_no_simnorm2/eval.csv',
+            'path': '/home/tdmpc2/tdmpc2/logs/cheetah-run/2016/GradFromBoth_full_rank_rgb_no_linear_no_simnorm2/eval.csv',
             'label': 'grad from both',
             'color': 'y',
             'marker': '^'
@@ -122,25 +122,25 @@ def plot_eval_rewards(seed):
 
     ablation = [
         {
-            'path': '/home/jyu197/tdmpc2/tdmpc2/logs/cheetah-run/2015/grad_from_Q_R_011_full_rank_rgb_no_linear_no_simnorm_seed2015/eval.csv',
+            'path': '/home/tdmpc2/tdmpc2/logs/cheetah-run/2015/grad_from_Q_R_011_full_rank_rgb_no_linear_no_simnorm_seed2015/eval.csv',
             'label': 'grad from Q R',
             'color': 'r',
             'marker': 's'
         },
         {
-            'path': '/home/jyu197/tdmpc2/tdmpc2/logs/cheetah-run/2015/GradFromQR_full_rank_rgb_no_linear_no_simnorm/eval.csv',
+            'path': '/home/tdmpc2/tdmpc2/logs/cheetah-run/2015/GradFromQR_full_rank_rgb_no_linear_no_simnorm/eval.csv',
             'label': 'grad from QR (another run)',
             'color': 'g',
             'marker': '^'
         },
         {
-            'path': '/home/jyu197/tdmpc2/tdmpc2/logs/cheetah-run/2015/grad_from_Q_R_011_rgb_no_linear_no_simnorm_seed2015/eval.csv',
+            'path': '/home/tdmpc2/tdmpc2/logs/cheetah-run/2015/grad_from_Q_R_011_rgb_no_linear_no_simnorm_seed2015/eval.csv',
             'label': 'grad from Q R no LU',
             'color': 'b',
             'marker': 'o'
         },
         # {
-        #     'path': '/home/jyu197/tdmpc2/tdmpc2/logs/cheetah-run/2015/grad_from_Q_R_1_full_rank_rgb_no_linear_no_simnorm_seed2015/eval.csv',
+        #     'path': '/home/tdmpc2/tdmpc2/logs/cheetah-run/2015/grad_from_Q_R_1_full_rank_rgb_no_linear_no_simnorm_seed2015/eval.csv',
         #     'label': 'grad from Q R (different grad weight)',
         #     'color': 'y',
         #     'marker': 'p'

@@ -15,9 +15,9 @@ Paths
 Change these three paths if your files live elsewhere.
 """
 # ---------------------------------------------------------------------
-CHECKPOINT_PATH = "/home/jyu197/tdmpc2/tdmpc2/logs/cheetah-run/2020/51_bin/models/final.pt"
-CFG_PATH        = "/home/jyu197/tdmpc2/tdmpc2/logs/cheetah-run/2020/51_bin/.hydra/config.yaml"
-OBS_PATH        = "/scratch/tshu2/jyu197/obs_data/cheetah-run/obs/observations.pt"
+CHECKPOINT_PATH = "/home/tdmpc2/tdmpc2/logs/cheetah-run/2020/51_bin/models/final.pt"
+CFG_PATH        = "/home/tdmpc2/tdmpc2/logs/cheetah-run/2020/51_bin/.hydra/config.yaml"
+OBS_PATH        = "/scratch//obs_data/cheetah-run/obs/observations.pt"
 # ---------------------------------------------------------------------
 import os, math, time, random
 import numpy as np
