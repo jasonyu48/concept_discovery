@@ -9,7 +9,7 @@ action_dim: 1
 obs: rgb
 episodic: true
 two_actions: true
-reward_mode: dense_reward  #dense_reward
+reward_mode: sparse  #dense_reward
 terminate_on_success: true
 
 # evaluation
@@ -20,7 +20,7 @@ eval_freq: 6_000
 # training
 steps: 300_000    #300_000
 batch_size: 256
-reward_coef: 2
+reward_coef: 10
 value_coef: 0.1
 termination_coef: 1
 consistency_coef: 2
@@ -41,7 +41,7 @@ discount_min: 0.95
 discount_max: 0.995
 buffer_size: 100_000
 q_sample_ratio: 1.0  # Ratio of buffer data visible to Q-function and collapse prevention training (0.0-1.0)
-exp_name: concept_discovery_two_actions_final_more_explore_8_grace2
+exp_name: concept_discovery_random2
 train_print_freq: 100  # print training episodes every 100 episodes instead of every episode
 data_dir: ???
 JEPA_sg: false
@@ -51,6 +51,7 @@ grad_from_policy: false
 grad_from_current_R: false
 current_reward: false  #change to false
 original_tdmpc2_implementation: false
+grad_from_dynamics: true
 
 # misc
 compile: false
