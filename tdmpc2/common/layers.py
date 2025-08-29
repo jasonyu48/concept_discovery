@@ -447,8 +447,6 @@ def enc(cfg, out={}):
 			raise NotImplementedError(f"Encoder for observation type {k} not implemented.")
 	return nn.ModuleDict(out)
 
-
-###adding the deocoder-Siyi Chen 2025-7-3#####
 def dec(cfg):
     """Return a decoder that mirrors the encoder."""
     if cfg.obs == "rgb":
