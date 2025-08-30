@@ -1,208 +1,115 @@
-## Why and How Auxiliary Tasks Improve JEPA Representations
+## Why and How Auxiliary Tasks Improve JEPA Representations (P-JEPA)
 
-This repository extends TD-MPC2 for research on concept discovery under pixel observations. It focuses on world-model representation learning and analyzing the separability/interpretability of learned “concepts.” On top of TD-MPC2’s scalable world model and MPC planning, we add encoding-space monitoring, collapse prevention, visualization, and analysis utilities to study the process of concept discovery systematically.
+This repository contains the reference code for the paper “Why and How Auxiliary Tasks Improve JEPA Representations.” It implements a practical Joint-Embedding Predictive Architecture with an auxiliary regression head (P-JEPA) and provides a simple counting environment to reproduce the qualitative/quantitative findings in the paper.
 
-What’s included:
-- Single-task online training (primarily on a synthetic counting environment)
-- Encoding-space/dimensionality monitoring and visualization
-- Decoder reconstruction with GIF/JPG exports
-- Optional representation collapse prevention (random-phenomenon predictor)
+At a glance:
+- P-JEPA jointly trains an encoder E, latent dynamics T, and an auxiliary head P on top of latent states.
+- Theory: in deterministic MDPs, if both the latent-transition consistency loss and the auxiliary loss reach zero, non‑equivalent observations cannot collapse to the same representation (No Unhealthy Representation Collapse). The auxiliary target determines which distinctions the encoder must preserve.
+- Practice: in a counting environment, P-JEPA learns nine distinct latent clusters (for counts 0–8) when the auxiliary target is reward. Alternative auxiliaries (e.g., fixed random function) change which distinctions are preserved.
 
-Note: This codebase reuses TD-MPC2’s structure for core training, environments, and algorithms. Defaults, training flow, and monitoring are customized for concept discovery experiments.
 
-### Paper (paste here)
-- Title: <paste the official title from Knowledge_Discovery.pdf>
-- Abstract: <paste abstract>
-- Keywords: <optional>
+## Setup
 
-If you want me to auto-insert the title/abstract from the PDF, share the text or allow me to extract it.
+Please follow one of the two supported paths:
 
----
+- Docker (recommended, reproducible): see `DOCKER_SETUP.md` for a fully containerized workflow.
+- Conda (local environment): see `environment_setup.txt`.
 
-## Setup and Installation
 
-We recommend Conda (or Docker) for dependencies:
+## Repository Layout (key files)
+
+- `tdmpc2/train.py`: Hydra entrypoint (default config: `concept_discovery_random`).
+- `tdmpc2/concept_discovery_*.yaml`: experiment configs used in the paper (P-JEPA, random auxiliary, reward-only, dense-reward, etc.).
+- `tdmpc2/envs/counting.py`: 64×64 RGB counting environment used in the experiments.
+- `tdmpc2/simple_encoding_space_monitor.py`: produces monitoring curves, t-SNE plots, and decoder reconstructions.
+- `tdmpc2/tdmpc2.py`, `tdmpc2/common/*`, `tdmpc2/trainer/*`: agent, training loop, and utilities derived from TD‑MPC2.
+
+
+## Quickstart (Counting Environment)
+
+All commands below run online training in the counting environment. Hydra organizes outputs under `tdmpc2/logs/${task}/${seed}/${exp_name}`. A protective guard refuses to overwrite an experiment directory if it already contains `eval.csv`; change `exp_name` to start a new run.
+
+General pattern:
 
 ```bash
-conda env create -f docker/environment.yaml
-conda activate tdmpc2
+python tdmpc2/train.py --config-name <config_yaml_basename>
 ```
 
 Notes:
-- `docker/environment.yaml` pins PyTorch 2.6 nightly and TorchRL/TensorDict nightly (CUDA 12.4 by default).
-- CPU-only runs the counting environment and training but will be slow (GPU ≥ 8GB recommended).
+- `task=counting4` in the configs sets the target count n=4; change to `countingk` to target another count.
+- `model_size` must be one of `[1, 5, 19, 48, 317]`. We used `5` in our runs.
+- Online runs do not use `data_dir`. Offline training is only for multi‑task datasets (`mt30`/`mt80`).
 
-Optional Docker (simple):
-```bash
-docker build -f Dockerfile-simple -t tdmpc2:simple .
-# See CONFIGURATION_GUIDE.md for a convenient alias and usage examples
-```
 
----
+### 1) P-JEPA with reward auxiliary (paper Fig. 1a)
 
-## Quickstart
-
-The root `train.py` is a wrapper that calls `tdmpc2/train.py` (Hydra configs live under `tdmpc2/`). The default training config is `concept_discovery_random.yaml`.
+Produces nine distinct clusters (counts 0–8); reconstructions discard shape/color/position.
 
 ```bash
-# Option 1: run the wrapper at the repo root (recommended)
-python train.py task=counting4 model_size=5
-
-# Option 2: call the real entrypoint directly
-python tdmpc2/train.py task=counting4 model_size=5
+python tdmpc2/train.py --config-name concept_discovery_P_JEPA
 ```
 
-Common arguments (all overridable from CLI):
-- `task`: e.g., `countingN` (such as `counting4`).
-- `model_size`: capacity hyperparameter set, one of `{1, 5, 19, 48, 317}`.
-- `steps`: training steps (default 300k).
-- `obs`: observation type, `rgb` for concept discovery.
 
-Outputs:
-- Logs under `tdmpc2/logs/<task>/<seed>/<exp_name>` (shared by Hydra and code).
-- Periodic eval to `eval.csv`; training snapshot rows to `train.csv`.
-- Encoding-space artifacts under `encoding_monitor/`.
+### 2) P-JEPA with random auxiliary (paper Fig. 1b)
 
-### Evaluation
-
-Use `tdmpc2/evaluate.py`. The script’s default config name is `config`, but this repo provides `tdmpc2/tdmpc2.yaml`. Select it via Hydra:
+Uses a fixed 256‑D random function as the auxiliary. Prevents most collapse but does not organize by count.
 
 ```bash
-python tdmpc2/evaluate.py --config-name tdmpc2 \
-  task=counting4 checkpoint=/path/to/agent.pt save_video=true
+python tdmpc2/train.py --config-name concept_discovery_random
 ```
 
-Notes:
-- Single-task models don’t need explicit `model_size` (default is 5). Set `checkpoint` to your saved weights.
 
----
+### 3) Reward‑only gradients to encoder (paper Fig. 1c)
 
-## Concept Discovery: Features and Components
+Encoder only receives reward loss gradients (no latent‑dynamics gradients). Leads to coarse separation.
 
-- Encoding-space monitoring (`tdmpc2/simple_encoding_space_monitor.py`)
-  - Tracks and plots: average pairwise distance in latent space, minimum encoder-Jacobian rank (optional), RankMe (optional; requires `reptrix`), and clustering accuracy (available on the counting env).
-  - Periodically writes `monitoring_curves.png` and `monitoring_data.json`.
-  - Generates decoder comparison GIFs/JPGs under `decoder_gifs/` at the end of training.
-
-- Collapse prevention
-  - Enable via `cfg.collapse_prevention=true`. A frozen random function `_random_fn` and a predictor head `_collapse_pred` are trained with an MSE objective to discourage representation collapse.
-  - Random net options: `linear` or `transformer` (see `tdmpc2/common/world_model.py`).
-
-- Reward modeling and optional “current reward” head
-  - Standard head: `reward(z, a)` (two-hot discrete regression).
-  - Optional current-reward head: `reward_current(z)` trained on environment-provided `reward_pre` (action-independent).
-
-- Planning and policy
-  - Retains TD-MPC2’s latent-space MPPI planning (`mpc=true`).
-  - Optional training-time “random action selection” to reduce MPPI compute (`random_action_selection=true`).
-
----
-
-## Counting Environment (CountingObjectsEnv)
-
-Location: `tdmpc2/envs/counting.py`
-- Observation: `64×64` RGB (C,H,W). Object positions vary every step; shape/color stay fixed within an episode.
-- Action:
-  - Continuous (default): scalar in [−1,1] with thresholding to decrement/increment/no-op.
-  - Discrete: one-hot (2-action or 3-action: remove/[no-op]/add).
-- Episode termination: on target match or step limit (`episode_length`).
-- Reward: sparse or dense (`reward_mode`).
-
-Quick test:
 ```bash
-python train.py task=counting4 steps=10000 obs=rgb
+python tdmpc2/train.py --config-name concept_discovery_rewardonly
 ```
 
----
 
-## Configurations and Common Switches
+### Optional: Dense reward ablation
 
-Key configs under `tdmpc2/`:
-- `concept_discovery_random.yaml` (default): random action selection + collapse prevention.
-- `concept_discovery_rewardonly.yaml`: reward-only supervision; enables `current_reward`.
-- `concept_discovery_P_JEPA.yaml`: current reward + JEPA-style stop-gradient control.
-- `concept_discovery_dense.yaml`: dense reward version.
-- `concept_discovery_no_phenomenon.yaml`: collapse prevention disabled (ablation).
-
-Important hyperparameters (examples):
-- Training: `steps, batch_size, lr, eval_freq, seed`
-- Task/obs: `task, obs, episodic, discrete_action, two_actions, reward_mode`
-- Architecture: `encoder_arch, latent_dim, num_q, dynamics_arch (mlp/iresnet)`
-- Collapse prevention: `collapse_prevention, collapse_prevention_network, collapse_prevention_dim, collapse_prevention_coef`
-- Current reward: `current_reward, grad_from_current_R`
-- Planning: `mpc, iterations, num_samples, horizon, temperature`
-- Monitoring: `monitor_freq, dim_monitor_steps, monitor_encoding_space, monitor_cluster_acc, monitor_jacobian_rank, monitor_rankme`
-
-All keys are Hydra-overridable via `key=value` on the CLI.
-
----
-
-## Visualization and Analysis Scripts
-
-Additional analysis utilities:
-- `tdmpc2/plot_encoding_metrics.py`
-  - Aggregates estimated latent dimensionality and RankMe across experiments and plots steps–cluster_acc curves.
-  - Example:
-    ```bash
-    python tdmpc2/plot_encoding_metrics.py --seed 2022 --task counting4 \
-      --results_root /path/to/tdmpc2/logs
-    ```
-
-Monitoring artifacts live under: `tdmpc2/logs/<task>/<seed>/<exp_name>/encoding_monitor/`.
-
----
-
-## Repro Tips
-
-Configs correspond to ablations in the paper (match to your sections as needed):
-- Random actions + collapse prevention: `concept_discovery_random.yaml`
-- Reward-only (with current-reward head): `concept_discovery_rewardonly.yaml`
-- Current reward + JEPA control: `concept_discovery_P_JEPA.yaml`
-- Dense reward: `concept_discovery_dense.yaml`
-- No collapse prevention (ablation): `concept_discovery_no_phenomenon.yaml`
-
-Example:
 ```bash
-python train.py --config-name concept_discovery_random task=counting4 model_size=5
+python tdmpc2/train.py --config-name concept_discovery_dense model_size=5
 ```
 
-Note: `tdmpc2/train.py` defaults to `--config-name concept_discovery_random`, but you can set it explicitly.
 
----
+## Outputs and Monitoring
 
-## FAQ
+Under `tdmpc2/logs/${task}/${seed}/${exp_name}` you will find:
 
-- Config for evaluation
-  - `evaluate.py` defaults to config name `config`. This repo provides `tdmpc2.yaml`. Use: `--config-name tdmpc2`.
+- CSV logs: `train.csv`, `eval.csv` (episode reward/success, etc.).
+- `encoding_monitor/` from `SimpleEncodingSpaceMonitor`:
+  - `monitoring_curves.png`: encoding-space size, Jacobian rank, RankMe, decoder loss, cluster accuracy.
+  - `tsne_clusters.png` and `tsne_clusters_best.png` (if labels available; counting env only).
+  - `decoder_gifs/decoder_cmp_*_original_observation.jpg` and `..._reconstruction.jpg` (counting env) or GIFs in non-counting envs.
+  - `models/latest_checkpoint.pt` and `models/best_checkpoint.pt` saved periodically.
 
-- RankMe dependency
-  - RankMe monitoring requires the `reptrix` package and a saved observation tensor (you can enable `save_obs_for_rankme` and set `rankme_obs_path`). If not installed or missing, RankMe is skipped gracefully.
+Tip: If you see a FileExistsError about `eval.csv`, change `exp_name` in your config or delete the old directory.
 
-- Logs directory
-  - The program and Hydra share the same layout: `tdmpc2/logs/<task>/<seed>/<exp_name>`. The root `train.py` is just a wrapper and does not change paths.
 
----
+## Reproducing Paper Figures
 
-## Acknowledgments and Citation
+The three runs above correspond to Fig. 1 rows (a), (b), and (c) respectively. After each run reaches its best cluster compactness (as tracked by the monitor), use the artifacts in `encoding_monitor/` for:
+- PCA/2D viz: t-SNE plots are saved automatically; PCA and heatmap can be produced using tdmpc2/plot.py.
+- Decoder comparisons: compare `decoder_cmp_*_original_observation.jpg` vs `..._reconstruction.jpg`.
 
-This project builds on TD-MPC2. If this repository or the TD-MPC2 components are useful for your work, please also cite TD-MPC2:
 
-```text
-Hansen, N., Su, H., & Wang, X. TD-MPC2: Scalable, Robust World Models for Continuous Control. ICLR 2024.
-```
+## Troubleshooting
 
-And include your own paper citation here:
+- Overwrite protection: change `exp_name` if a previous run wrote `eval.csv` in the same work dir.
+- CUDA OOM during monitoring: reduce `monitor_batch_size` in the config.
+- WandB disabled by default: set `enable_wandb=true` and fill `wandb_project`, `wandb_entity` if you want remote logging.
 
-```text
-<Your paper BibTeX / citation entry>
-```
 
-For the original project and more background, see the TD-MPC2 website (`https://www.tdmpc2.com`).
+## Citation
 
----
+To preserve double‑blind review, author information is intentionally omitted. A formal citation will be added after the review process.
 
-## License
 
-This project is released under the MIT License (see `LICENSE`). Third-party dependencies are subject to their respective licenses.
+## Acknowledgements
+
+This codebase builds on the TD‑MPC2 implementation and follows its logging and agent structure, adapted for the counting environment and auxiliary‑task analysis in the paper.
 
 
