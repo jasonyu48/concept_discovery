@@ -41,7 +41,7 @@ Notes:
 - Online runs do not use `data_dir`. Offline training is only for multi‑task datasets (`mt30`/`mt80`).
 
 
-### 1) P-JEPA with reward auxiliary (paper Fig. 1a)
+### 1) P-JEPA with reward auxiliary (paper Fig. 1 first row)
 
 Produces nine distinct clusters (counts 0–8); reconstructions discard shape/color/position.
 
@@ -50,7 +50,7 @@ python tdmpc2/train.py --config-name concept_discovery_P_JEPA
 ```
 
 
-### 2) P-JEPA with random auxiliary (paper Fig. 1b)
+### 2) P-JEPA with random auxiliary (paper Fig. 1 second row)
 
 Uses a fixed 256‑D random function as the auxiliary. Prevents most collapse but does not organize by count.
 
@@ -59,7 +59,7 @@ python tdmpc2/train.py --config-name concept_discovery_random
 ```
 
 
-### 3) Reward‑only gradients to encoder (paper Fig. 1c)
+### 3) Reward‑only gradients to encoder (paper Fig. 1 third row)
 
 Encoder only receives reward loss gradients (no latent‑dynamics gradients). Leads to coarse separation.
 
