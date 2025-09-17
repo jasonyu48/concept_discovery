@@ -236,6 +236,9 @@ class WorldModel(nn.Module):
 		repr += "\nParameter breakdown:"
 		for name, n in param_breakdown:
 			repr += f"\n{name}: {n:,}"
+		# Latent noise setting (printed only when enabled)
+		if getattr(self.cfg, 'latent_noise', False):
+			repr += "\nLatent noise: std=0.01 (training only)\n"
 		return repr
 
 	@property
@@ -310,7 +313,10 @@ class WorldModel(nn.Module):
 		if self.cfg.multitask:
 			z = self.task_emb(z, task)
 		z = torch.cat([z, a], dim=-1)
-		return self._dynamics(z)
+		z_next = self._dynamics(z)
+		if getattr(self.cfg, 'latent_noise', False) and self.training:
+			z_next = z_next + 0.01 * torch.randn_like(z_next)
+		return z_next
 
 	def reward(self, z, a, task):
 		"""
