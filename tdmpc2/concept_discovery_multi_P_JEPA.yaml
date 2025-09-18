@@ -41,7 +41,7 @@ discount_min: 0.95
 discount_max: 0.995
 buffer_size: 100_000
 q_sample_ratio: 1.0  # Ratio of buffer data visible to Q-function and collapse prevention training (0.0-1.0)
-exp_name: concept_discovery_multi_P_JEPA
+exp_name: concept_discovery_multi_P_JEPA_10_layers
 train_print_freq: 100  # print training episodes every 100 episodes instead of every episode
 data_dir: ???
 JEPA_sg: false
@@ -116,7 +116,7 @@ collapsed_encoder_init: false  # initialise RGB MLP encoder in collapsed mode
 task_dim: 96
 num_q: 1
 dropout: 0.01
-num_jepa_layers: 3   # NEW: number of stacked P-JEPA layers (E1=ResNet, later=MLP)
+num_jepa_layers: 10   # NEW: number of stacked P-JEPA layers (E1=ResNet, later=MLP)
 
 # logging
 wandb_project: ???

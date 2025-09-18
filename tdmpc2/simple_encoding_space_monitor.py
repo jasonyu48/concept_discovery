@@ -112,7 +112,10 @@ class SimpleEncodingSpaceMonitor:
         # Clustering accuracy (optional, only for counting envs where labels are known)
         self.enable_cluster_acc = getattr(self.cfg, 'monitor_cluster_acc', True)
         if self.enable_cluster_acc:
-            self.monitoring_data['cluster_acc'] = []
+            self.monitoring_data['cluster_acc'] = []              # top layer (backward-compat)
+            self.monitoring_data['cluster_acc_first'] = []        # layer 1
+            self.monitoring_data['cluster_acc_mid'] = []          # middle layer
+            self.monitoring_data['cluster_acc_top'] = []          # top layer
             # Track the best cluster accuracy encountered so far for saving the best t-SNE plot
             self.best_cluster_acc = float('-inf')
         
@@ -188,15 +191,26 @@ class SimpleEncodingSpaceMonitor:
         if self.enable_cluster_acc:
             if self.baseline_labels is not None:
                 try:
+                    # Top encoder accuracy (uses self.baseline_encodings which is top-level)
                     initial_cluster_acc = self._compute_cluster_accuracy(self.baseline_encodings, self.baseline_labels)
-                    print(f"🎯 Initial cluster accuracy: {initial_cluster_acc*100:.2f}%")
+                    print(f"🎯 Initial cluster accuracy (top): {initial_cluster_acc*100:.2f}%")
                     self.monitoring_data['cluster_acc'].append(initial_cluster_acc)
+                    # Placeholders for per-layer series to keep list lengths aligned
+                    self.monitoring_data['cluster_acc_first'].append(None)
+                    self.monitoring_data['cluster_acc_mid'].append(None)
+                    self.monitoring_data['cluster_acc_top'].append(initial_cluster_acc)
                 except Exception as e:
                     print(f"⚠️ Failed to compute initial cluster accuracy: {e}")
                     self.monitoring_data['cluster_acc'].append(None)
+                    self.monitoring_data['cluster_acc_first'].append(None)
+                    self.monitoring_data['cluster_acc_mid'].append(None)
+                    self.monitoring_data['cluster_acc_top'].append(None)
             else:
                 print("🎯 Initial cluster accuracy: N/A (no labels available)")
                 self.monitoring_data['cluster_acc'].append(None)
+                self.monitoring_data['cluster_acc_first'].append(None)
+                self.monitoring_data['cluster_acc_mid'].append(None)
+                self.monitoring_data['cluster_acc_top'].append(None)
         
         # --- Collapse prevention: measure initial random function magnitude ---
         if getattr(self.cfg, 'collapse_prevention', False) and hasattr(self.agent.model, '_random_fn') and self.agent.model._random_fn is not None:
@@ -489,16 +503,39 @@ class SimpleEncodingSpaceMonitor:
         # Clustering accuracy metric (requires labels)
         if self.enable_cluster_acc and self.baseline_labels is not None:
             try:
-                acc = self._compute_cluster_accuracy(self.baseline_encodings, self.baseline_labels)
-                metrics['cluster_acc'] = acc
-                self.monitoring_data['cluster_acc'].append(acc)
-                print(f"   Cluster accuracy: {acc*100:.2f}%")
-                cluster_acc_computed = acc
+                # Compute per-layer encodings for first, middle, and top layers
+                with torch.no_grad():
+                    z_layers = self.agent.model.encode_all_layers(self.baseline_observations.to(self.device), task=None)
+                L = len(z_layers)
+                idx_first = 0
+                idx_mid = L // 2
+                idx_top = L - 1
+                acc_first = self._compute_cluster_accuracy(z_layers[idx_first], self.baseline_labels)
+                acc_mid = self._compute_cluster_accuracy(z_layers[idx_mid], self.baseline_labels)
+                acc_top = self._compute_cluster_accuracy(z_layers[idx_top], self.baseline_labels)
+                # For backward-compat, keep 'cluster_acc' as top layer
+                metrics['cluster_acc'] = acc_top
+                self.monitoring_data['cluster_acc'].append(acc_top)
+                # Store detailed series
+                metrics['cluster_acc_first'] = acc_first
+                metrics['cluster_acc_mid'] = acc_mid
+                metrics['cluster_acc_top'] = acc_top
+                self.monitoring_data['cluster_acc_first'].append(acc_first)
+                self.monitoring_data['cluster_acc_mid'].append(acc_mid)
+                self.monitoring_data['cluster_acc_top'].append(acc_top)
+                print(f"   Cluster accuracy (first/mid/top): {acc_first*100:.2f}% / {acc_mid*100:.2f}% / {acc_top*100:.2f}%")
+                cluster_acc_computed = acc_top
             except Exception as e:
-                print(f"⚠️ Failed to compute cluster accuracy: {e}")
+                print(f"⚠️ Failed to compute per-layer cluster accuracy: {e}")
                 self.monitoring_data['cluster_acc'].append(None)
+                self.monitoring_data['cluster_acc_first'].append(None)
+                self.monitoring_data['cluster_acc_mid'].append(None)
+                self.monitoring_data['cluster_acc_top'].append(None)
         elif self.enable_cluster_acc:
             self.monitoring_data['cluster_acc'].append(None)
+            self.monitoring_data['cluster_acc_first'].append(None)
+            self.monitoring_data['cluster_acc_mid'].append(None)
+            self.monitoring_data['cluster_acc_top'].append(None)
         
         if self.enable_jacobian_rank:
             min_rank = self.compute_min_jacobian_rank(self.baseline_observations)
@@ -791,17 +828,25 @@ class SimpleEncodingSpaceMonitor:
                 ax.grid(True, alpha=0.3)
                 subplot_idx += 1
 
-        # Subplot 6: Cluster accuracy
+        # Subplot 6: Cluster accuracy (first/mid/top)
         if self.enable_cluster_acc and 'cluster_acc' in self.monitoring_data:
-            cluster_accs = np.array([acc if acc is not None else np.nan for acc in self.monitoring_data['cluster_acc']])
-            if not np.all(np.isnan(cluster_accs)):
+            acc_top = np.array([acc if acc is not None else np.nan for acc in self.monitoring_data['cluster_acc_top']])
+            acc_first = np.array([acc if acc is not None else np.nan for acc in self.monitoring_data['cluster_acc_first']])
+            acc_mid = np.array([acc if acc is not None else np.nan for acc in self.monitoring_data['cluster_acc_mid']])
+            if (not np.all(np.isnan(acc_top))) or (not np.all(np.isnan(acc_first))) or (not np.all(np.isnan(acc_mid))):
                 ax = plt.subplot(rows, cols, subplot_idx)
-                ax.plot(steps, cluster_accs * 100, 'orange', marker='o', linewidth=2, markersize=4)  # Convert to percentage
-                ax.set_title('Cluster Accuracy', fontsize=12, fontweight='bold')
+                if not np.all(np.isnan(acc_first)):
+                    ax.plot(steps, acc_first * 100, label='first', color='tab:blue', linewidth=2)
+                if not np.all(np.isnan(acc_mid)):
+                    ax.plot(steps, acc_mid * 100, label='mid', color='tab:green', linewidth=2)
+                if not np.all(np.isnan(acc_top)):
+                    ax.plot(steps, acc_top * 100, label='top', color='tab:orange', linewidth=2)
+                ax.set_title('Cluster Accuracy (first/mid/top)', fontsize=12, fontweight='bold')
                 ax.set_xlabel('Training Steps')
                 ax.set_ylabel('Accuracy (%)')
                 ax.set_ylim(0, 100)
                 ax.grid(True, alpha=0.3)
+                ax.legend()
             subplot_idx += 1
 
         # Additional plot: training losses from train.csv (reward_loss, consistency_loss)
