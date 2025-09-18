@@ -32,7 +32,10 @@ class TDMPC2(torch.nn.Module):
 		# Build parameter groups for the main optimizer (optionally includes decoder)
 		param_groups = [
 			{'params': self.model._encoder.parameters(), 'lr': self.cfg.lr*self.cfg.enc_lr_scale},
-			{'params': self.model._dynamics.parameters()},
+			# Multi-layer encoders (vector→vector)
+			{'params': self.model._enc_layers.parameters()} if hasattr(self.model, '_enc_layers') else {'params': []},
+			# Multi-layer dynamics (MLP per layer)
+			{'params': self.model._dyn_layers.parameters()} if hasattr(self.model, '_dyn_layers') else {'params': []},
 			{'params': self.model._reward.parameters()},
 			{'params': self.model._termination.parameters() if self.cfg.episodic else []},
 			{'params': self.model._Qs.parameters()},
@@ -40,8 +43,12 @@ class TDMPC2(torch.nn.Module):
 			{'params': self.model._collapse_pred.parameters() if getattr(self.cfg, 'collapse_prevention', False) else []}
 		]
 		# Optional current reward head parameters
-		if getattr(self.cfg, 'current_reward', False) and getattr(self.model, '_reward_current', None) is not None:
-			param_groups.append({'params': self.model._reward_current.parameters()})
+		if getattr(self.cfg, 'current_reward', False):
+			# Include per-layer current reward heads when present
+			if hasattr(self.model, '_reward_current_layers') and self.model._reward_current_layers is not None:
+				param_groups.append({'params': self.model._reward_current_layers.parameters()})
+			elif getattr(self.model, '_reward_current', None) is not None:
+				param_groups.append({'params': self.model._reward_current.parameters()})
 		if getattr(self.cfg, 'enable_decoder', True):
 			param_groups.append({'params': self.model._decoder.parameters()})
 		# Use capturable=True only on CUDA devices for performance
@@ -327,9 +334,12 @@ class TDMPC2(torch.nn.Module):
 		self.pi_optim.zero_grad(set_to_none=True)
 
 		# ------------------------------------------------------------------
-		# Encode ALL observations *once* (shape: (T+1, B, latent_dim))
+		# Encode observations through ALL layers once
+		# enc_all: list of length L, each tensor shape (T+1, B, D)
+		# enc_obs: top-layer latents (T+1, B, D) used for control/decoder/etc.
 		# ------------------------------------------------------------------
-		enc_obs = self.model.encode(obs, task)
+		enc_all = self.model.encode_all_layers(obs, task)
+		enc_obs = enc_all[-1]
 
 		# ------------------------------------------------------------------
 		# Pairwise shrink loss: encourage smaller pairwise distances between
@@ -365,7 +375,7 @@ class TDMPC2(torch.nn.Module):
 			dec_loss = F.mse_loss(pred_rgb, rgb_norm)
 
 		# ------------------------------------------------------------------
-		# Compute TD targets using pre-computed encodings
+		# Compute TD targets using pre-computed TOP-layer encodings
 		# ------------------------------------------------------------------
 		if not self.cfg.grad_from_dynamics:
 			self.cfg.JEPA_sg = True
@@ -379,20 +389,42 @@ class TDMPC2(torch.nn.Module):
 				td_targets = self._td_target(next_z, reward, terminated, task)
 
 		# ------------------------------------------------------------------
-		# Latent rollout starting from encoded obs[0] (undetached)
+		# Consistency loss: original single-layer (flag) vs. new per-layer formulation
+		# Also construct the TOP-layer rollout for control path accordingly
 		# ------------------------------------------------------------------
-		zs = torch.empty(self.cfg.horizon+1, self.cfg.batch_size, self.cfg.latent_dim, device=self.device)
-		z = enc_obs[0]  # uses gradients
-		zs[0] = z
-		consistency_loss = 0
-		for t, (_action, _next_z) in enumerate(zip(action.unbind(0), next_z.unbind(0))):
-			if not self.cfg.grad_from_dynamics:
-				z_cons = self.model.next(z.detach(), _action, task)
-			z = self.model.next(z, _action, task) # predicted z at t+1
-			if self.cfg.grad_from_dynamics:
-				z_cons = z
-			consistency_loss = consistency_loss + F.mse_loss(z_cons, _next_z) * self.cfg.rho**t
-			zs[t+1] = z
+		L_layers = getattr(self.model, 'num_jepa_layers', 1)
+		if getattr(self.cfg, 'original_tdmpc2_implementation', False):
+			# Original TD-MPC2: single-layer consistency on top latent and rollout
+			zs = torch.empty(self.cfg.horizon+1, self.cfg.batch_size, self.cfg.latent_dim, device=self.device)
+			z = enc_obs[0]  # uses gradients
+			zs[0] = z
+			consistency_loss = 0
+			for t, (_action, _next_z) in enumerate(zip(action.unbind(0), next_z.unbind(0))):
+				if not self.cfg.grad_from_dynamics:
+					z_cons = self.model.next(z.detach(), _action, task)
+				z = self.model.next(z, _action, task) # predicted z at t+1
+				if self.cfg.grad_from_dynamics:
+					z_cons = z
+				consistency_loss = consistency_loss + F.mse_loss(z_cons, _next_z) * self.cfg.rho**t
+				zs[t+1] = z
+			consistency_loss = consistency_loss / self.cfg.horizon
+		else:
+			# New: per-layer P-JEPA consistency; separate top-layer rollout for control
+			consistency_loss = 0.0
+			for l in range(L_layers):
+				z_seq = enc_all[l]                  # (T+1, B, D)
+				for t, _action in enumerate(action.unbind(0)):
+					z_t = z_seq[t]
+					z_tp1_target = z_seq[t+1].detach() if self.cfg.JEPA_sg else z_seq[t+1]
+					if not self.cfg.grad_from_dynamics:
+						z_pred = self.model.next_layer(z_t.detach(), _action, task, layer_idx=l)
+					else:
+						z_pred = self.model.next_layer(z_t, _action, task, layer_idx=l)
+					consistency_loss = consistency_loss + F.mse_loss(z_pred, z_tp1_target) * self.cfg.rho**t
+			# Normalise by horizon and number of layers
+			consistency_loss = consistency_loss / (self.cfg.horizon * max(L_layers, 1))
+			# Use encoded top-layer sequence directly (no rollout) for control/actor-critic path
+			zs = enc_obs
 
 		# Predictions
 		_zs = zs[:-1]
@@ -409,11 +441,22 @@ class TDMPC2(torch.nn.Module):
 		# Optional current reward head (from latent only)
 		reward_current_preds = None
 		if getattr(self.cfg, 'current_reward', False):
-			if getattr(self.cfg, 'grad_from_current_R', False):
-				_zs_rc = _zs  # allow gradients
+			if getattr(self.cfg, 'original_tdmpc2_implementation', False):
+				# Original: use TOP-layer rollout sequence for current reward head
+				if getattr(self.cfg, 'grad_from_current_R', False):
+					_zs_rc = _zs  # allow gradients
+				else:
+					_zs_rc = _zs.detach()
+				reward_current_preds = self.model.reward_current(_zs_rc, task)
 			else:
-				_zs_rc = _zs.detach()
-			reward_current_preds = self.model.reward_current(_zs_rc, task)
+				# Multi-layer: per-layer current reward predictions from encoded sequences
+				# Build list length L, each tensor (T, B, num_bins)
+				reward_current_preds = []
+				for l in range(L_layers):
+					z_seq = enc_all[l][:-1]
+					z_in = z_seq if getattr(self.cfg, 'grad_from_current_R', False) else z_seq.detach()
+					pred = self.model.reward_current_layer(z_in, task, layer_idx=l)
+					reward_current_preds.append(pred)
 		if self.cfg.episodic:
 			if self.cfg.original_tdmpc2_implementation:
 				termination_pred = self.model.termination(zs[1:], task, unnormalized=True)
@@ -421,7 +464,7 @@ class TDMPC2(torch.nn.Module):
 				termination_pred = self.model.termination(zs[1:].detach(), task, unnormalized=True)
 
 		# Compute losses
-		# Split reward loss into post-action (environment reward) and current (pre-action) components
+		# Split reward loss into post-action (environment) and current (phenomenon) components
 		reward_post_loss = torch.tensor(0.0, device=self.device)
 		reward_curr_loss = torch.tensor(0.0, device=self.device)
 		value_loss = 0
@@ -433,9 +476,17 @@ class TDMPC2(torch.nn.Module):
 			reward_post_loss = reward_post_loss + math.soft_ce(rew_pred_unbind, rew_unbind, self.cfg).mean() * self.cfg.rho**t
 			# Current reward head loss (pre-action target)
 			if reward_current_preds is not None and preaction_targets is not None:
-				rew_curr_unbind = reward_current_preds[t]
 				pre_target_unbind = preaction_targets[t]
-				reward_curr_loss = reward_curr_loss + math.soft_ce(rew_curr_unbind, pre_target_unbind, self.cfg).mean() * self.cfg.rho**t
+				# Two cases: multi-layer list or single tensor (original path)
+				if isinstance(reward_current_preds, list):
+					layer_loss = 0.0
+					for l in range(L_layers):
+						rew_curr_unbind_l = reward_current_preds[l][t]
+						layer_loss = layer_loss + math.soft_ce(rew_curr_unbind_l, pre_target_unbind, self.cfg).mean()
+					reward_curr_loss = reward_curr_loss + (layer_loss / max(L_layers,1)) * self.cfg.rho**t
+				else:
+					rew_curr_unbind = reward_current_preds[t]
+					reward_curr_loss = reward_curr_loss + math.soft_ce(rew_curr_unbind, pre_target_unbind, self.cfg).mean() * self.cfg.rho**t
 			
 			# Apply Q-function mask to value loss if available
 			for _, qs_unbind_unbind in enumerate(qs_unbind.unbind(0)):
@@ -449,7 +500,6 @@ class TDMPC2(torch.nn.Module):
 					q_loss = q_loss.mean()
 				value_loss = value_loss + q_loss * self.cfg.rho**t
 
-		consistency_loss = consistency_loss / self.cfg.horizon
 		# Normalise reward components by horizon
 		reward_post_loss = reward_post_loss / self.cfg.horizon
 		reward_curr_loss = reward_curr_loss / self.cfg.horizon

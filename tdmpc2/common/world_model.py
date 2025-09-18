@@ -78,49 +78,54 @@ class WorldModel(nn.Module):
 	def __init__(self, cfg):
 		super().__init__()
 		self.cfg = cfg
+		# Number of stacked P-JEPA layers (>=1). Defaults to 3 for multilayer runs.
+		self.num_jepa_layers = int(getattr(cfg, 'num_jepa_layers', 3))
 		if cfg.multitask:
 			self._task_emb = nn.Embedding(len(cfg.tasks), cfg.task_dim, max_norm=1)
 			self.register_buffer("_action_masks", torch.zeros(len(cfg.tasks), cfg.action_dim))
 			for i in range(len(cfg.tasks)):
 				self._action_masks[i, :cfg.action_dims[i]] = 1.
+		# Base encoder for raw observations (layer 1)
 		self._encoder = layers.enc(cfg)
+		# Higher-layer encoders (vector -> vector), each maps latent_dim -> latent_dim
+		self._enc_layers = nn.ModuleList([
+			layers.mlp(
+				cfg.latent_dim + (cfg.task_dim if cfg.multitask else 0),
+				max(cfg.num_enc_layers-1, 1)*[cfg.enc_dim],
+				cfg.latent_dim,
+			)
+			for _ in range(max(self.num_jepa_layers-1, 0))
+		])
 		# --- Transition / Dynamics model selection ---
 		dyn_arch = getattr(cfg, "dynamics_arch", "iresnet")  # default to iresnet
 		# --- Select dynamics architecture ---
 		mlp_dims_dyn = getattr(cfg, "dyn_dims", cfg.mlp_dim)  # can be int or list
-		if dyn_arch == "iresnet":
-			C = getattr(cfg, "iresnet_C", 2.0)
-			simple_dyn = getattr(cfg, "simple_dynamics", False)
-			in_dim = cfg.latent_dim + cfg.action_dim + (cfg.task_dim if cfg.multitask else 0)
-			self._dynamics = layers.IResNetTransition(
-				in_dim=in_dim,
-				z_dim=cfg.latent_dim,
-				mlp_dims=mlp_dims_dyn,
-				C=C,
-				simple=simple_dyn,
-			)
-		elif dyn_arch == "mlp":
-			in_dim_full = cfg.latent_dim + cfg.action_dim + cfg.task_dim
+		# Build per-layer dynamics as MLP (no iResNet for multi-layer P-JEPA)
+		in_dim_full = cfg.latent_dim + cfg.action_dim + (cfg.task_dim if cfg.multitask else 0)
+		self._dyn_layers = nn.ModuleList()
+		for _ in range(max(self.num_jepa_layers, 1)):
 			if cfg.simnorm:
-				self._dynamics = layers.mlp(
-					in_dim_full,
-					mlp_dims_dyn,
-					cfg.latent_dim,
-					act=layers.SimNorm(cfg),
+				self._dyn_layers.append(
+					layers.mlp(in_dim_full, mlp_dims_dyn, cfg.latent_dim, act=layers.SimNorm(cfg))
 				)
 			else:
-				self._dynamics = layers.mlp(
-					in_dim_full,
-					mlp_dims_dyn,
-					cfg.latent_dim,
+				self._dyn_layers.append(
+					layers.mlp(in_dim_full, mlp_dims_dyn, cfg.latent_dim)
 				)
-		else:
-			raise ValueError(f"Unsupported dynamics_arch '{dyn_arch}'.")
+		# Backwards compatibility: single head uses the TOP layer dynamics
+		self._dynamics = self._dyn_layers[-1]
 		self._reward = layers.mlp(cfg.latent_dim + cfg.action_dim + cfg.task_dim, 2*[cfg.mlp_dim], max(cfg.num_bins, 1))
 		# Optional current reward head: predicts reward from latent only (no action)
 		if getattr(cfg, 'current_reward', False):
-			self._reward_current = layers.mlp(cfg.latent_dim + cfg.task_dim, 2*[cfg.mlp_dim], max(cfg.num_bins, 1))
+			# Per-layer current reward heads
+			self._reward_current_layers = nn.ModuleList([
+				layers.mlp(cfg.latent_dim + cfg.task_dim, 2*[cfg.mlp_dim], max(cfg.num_bins, 1))
+				for _ in range(max(self.num_jepa_layers, 1))
+			])
+			# Backwards compatibility: single head uses TOP layer
+			self._reward_current = self._reward_current_layers[-1]
 		else:
+			self._reward_current_layers = None
 			self._reward_current = None
 		self._termination = layers.mlp(cfg.latent_dim + cfg.task_dim, 2*[cfg.mlp_dim], 1) if cfg.episodic else None
 		if cfg.full_rank:
@@ -158,7 +163,12 @@ class WorldModel(nn.Module):
 		
 		init.zero_([self._reward[-1].weight, self._Qs.params["2", "weight"]])
 		if self._reward_current is not None:
-			init.zero_([self._reward_current[-1].weight])
+			# Zero last layer(s) reward_current final weights
+			if self._reward_current_layers is not None:
+				for m in self._reward_current_layers:
+					init.zero_([m[-1].weight])
+			else:
+				init.zero_([self._reward_current[-1].weight])
 
 		self.register_buffer("log_std_min", torch.tensor(cfg.log_std_min))
 		self.register_buffer("log_std_dif", torch.tensor(cfg.log_std_max) - self.log_std_min)
@@ -206,6 +216,23 @@ class WorldModel(nn.Module):
 			if m == self._termination and not self.cfg.episodic:
 				continue
 			repr += f"{name}: {m}\n"
+		# Multi-layer P-JEPA details
+		if getattr(self, 'num_jepa_layers', 1) > 1:
+			repr += f"Multi-layer P-JEPA: L={self.num_jepa_layers}\n"
+			# Higher encoders (E2..EL)
+			repr += "Higher encoders:\n"
+			for idx, enc_l in enumerate(self._enc_layers, start=2):
+				repr += f"  E{idx}: {enc_l}\n"
+			# Per-layer dynamics (T1..TL)
+			repr += "Per-layer dynamics:\n"
+			for idx, dyn_l in enumerate(self._dyn_layers, start=1):
+				repr += f"  T{idx}: {dyn_l}\n"
+			# Per-layer current reward heads
+			if getattr(self.cfg, 'current_reward', False) and getattr(self, '_reward_current_layers', None) is not None:
+				repr += "Per-layer current reward:\n"
+				for idx, r_l in enumerate(self._reward_current_layers, start=1):
+					repr += f"  P_current{idx}: {r_l}\n"
+			repr += "Control latent: top layer\n"
 		# Optionally include current-reward head in the printed architecture
 		if getattr(self.cfg, 'current_reward', False) and getattr(self, '_reward_current', None) is not None:
 			repr += f"Current reward: {self._reward_current}\n"
@@ -233,6 +260,15 @@ class WorldModel(nn.Module):
 			param_breakdown.append(("Decoder", count_params(self._decoder)))
 		if getattr(self.cfg, 'collapse_prevention', False) and getattr(self, '_collapse_pred', None) is not None:
 			param_breakdown.append(("Collapse prevention", count_params(self._collapse_pred)))
+		# Multi-layer parameter summaries
+		if getattr(self, 'num_jepa_layers', 1) > 1:
+			enc_layers_params = sum(count_params(m) for m in self._enc_layers)
+			dyn_layers_params = sum(count_params(m) for m in self._dyn_layers)
+			param_breakdown.append(("Higher encoders (E2..EL)", enc_layers_params))
+			param_breakdown.append(("Dynamics (all layers)", dyn_layers_params))
+			if getattr(self.cfg, 'current_reward', False) and getattr(self, '_reward_current_layers', None) is not None:
+				rc_layers_params = sum(count_params(m) for m in self._reward_current_layers)
+				param_breakdown.append(("Current reward (all layers)", rc_layers_params))
 		repr += "\nParameter breakdown:"
 		for name, n in param_breakdown:
 			repr += f"\n{name}: {n:,}"
@@ -303,8 +339,55 @@ class WorldModel(nn.Module):
 			flat_enc = self._encoder[self.cfg.obs](flat_obs)
 			# 3. Restore the original leading dimensions → (T, B, latent_dim)
 			enc = flat_enc.reshape(*leading_dims, -1)
-			return enc
-		return self._encoder[self.cfg.obs](obs)
+			# Pass through higher-layer encoders sequentially
+			z = enc
+			for enc_l in self._enc_layers:
+				z_in = z
+				if self.cfg.multitask:
+					z_in = self.task_emb(z_in, task)
+				z = enc_l(z_in)
+			return z
+		# Non-RGB path
+		z1 = self._encoder[self.cfg.obs](obs)
+		z = z1
+		for enc_l in self._enc_layers:
+			z_in = z
+			if self.cfg.multitask:
+				z_in = self.task_emb(z_in, task)
+			z = enc_l(z_in)
+		return z
+
+	def encode_all_layers(self, obs, task):
+		"""Encode into a list [z1, z2, ..., zL]. Supports (T,B,...) for RGB.
+		Returns per-layer tensors with same leading dims as input (obs or (T,B,...))."""
+		zs = []
+		if self.cfg.multitask:
+			obs = self.task_emb(obs, task)
+		if self.cfg.obs == 'rgb' and obs.ndim == 5:
+			leading_dims = obs.shape[:2]
+			flat_obs = obs.reshape(-1, *obs.shape[-3:])
+			flat_enc = self._encoder[self.cfg.obs](flat_obs)
+			z1 = flat_enc.reshape(*leading_dims, -1)
+			zs.append(z1)
+			z_prev = z1
+			for enc_l in self._enc_layers:
+				z_in = z_prev
+				if self.cfg.multitask:
+					z_in = self.task_emb(z_in, task)
+				z_prev = enc_l(z_in)
+				zs.append(z_prev)
+			return zs
+		# Non-RGB path
+		z1 = self._encoder[self.cfg.obs](obs)
+		zs.append(z1)
+		z_prev = z1
+		for enc_l in self._enc_layers:
+			z_in = z_prev
+			if self.cfg.multitask:
+				z_in = self.task_emb(z_in, task)
+			z_prev = enc_l(z_in)
+			zs.append(z_prev)
+		return zs
 
 	def next(self, z, a, task):
 		"""
@@ -314,6 +397,16 @@ class WorldModel(nn.Module):
 			z = self.task_emb(z, task)
 		z = torch.cat([z, a], dim=-1)
 		z_next = self._dynamics(z)
+		if getattr(self.cfg, 'latent_noise', False) and self.training:
+			z_next = z_next + 0.1 * torch.randn_like(z_next)
+		return z_next
+
+	def next_layer(self, z, a, task, layer_idx: int):
+		"""Per-layer transition: z_l, a -> z'_l using dynamics of the given layer."""
+		if self.cfg.multitask:
+			z = self.task_emb(z, task)
+		z_in = torch.cat([z, a], dim=-1)
+		z_next = self._dyn_layers[layer_idx](z_in)
 		if getattr(self.cfg, 'latent_noise', False) and self.training:
 			z_next = z_next + 0.1 * torch.randn_like(z_next)
 		return z_next
@@ -336,6 +429,13 @@ class WorldModel(nn.Module):
 		if self.cfg.multitask:
 			z = self.task_emb(z, task)
 		return self._reward_current(z)
+
+	def reward_current_layer(self, z, task, layer_idx: int):
+		"""Per-layer current reward from z_l."""
+		if self._reward_current_layers is None:
+			raise AttributeError('current_reward layers are disabled')
+		zin = self.task_emb(z, task) if self.cfg.multitask else z
+		return self._reward_current_layers[layer_idx](zin)
 	
 	def termination(self, z, task, unnormalized=False):
 		"""

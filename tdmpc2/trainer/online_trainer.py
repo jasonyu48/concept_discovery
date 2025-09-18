@@ -92,9 +92,16 @@ class OnlineTrainer(Trainer):
 		if not hasattr(self.agent, 'encoding_monitor') or self.agent.encoding_monitor is None:
 			print("🔍 Initializing simple encoding space monitor...")
 			try:
+				# Pass a top-encoder wrapper so the monitor uses TOP-LAYER latents
+				class _TopEncoder(torch.nn.Module):
+					def __init__(self, model):
+						super().__init__()
+						self.model = model
+					def forward(self, x):
+						return self.model.encode(x, None)
 				self.agent.encoding_monitor = SimpleEncodingSpaceMonitor(
 					cfg=self.cfg,
-					encoder=self.agent.model._encoder[self.cfg.obs],
+					encoder=_TopEncoder(self.agent.model),
 					env=self.env,
 					device=str(self.agent.device),
 					save_dir=self.cfg.work_dir / "encoding_monitor",

@@ -23,7 +23,7 @@ if torch.cuda.is_available():
 torch.set_float32_matmul_precision('high')
 
 
-@hydra.main(config_name='concept_discovery_P_JEPA', config_path='.', version_base=None)
+@hydra.main(config_name='concept_discovery_multi_P_JEPA', config_path='.', version_base=None)
 def train(cfg: dict):
 	"""
 	Script for training single-task / multi-task TD-MPC2 agents.
@@ -60,6 +60,10 @@ def train(cfg: dict):
 
 	set_seed(cfg.seed)
 	print(colored('Work dir:', 'yellow', attrs=['bold']), cfg.work_dir)
+
+	# Guard: original TD-MPC2 implementation must use single-layer model
+	if getattr(cfg, 'original_tdmpc2_implementation', False) and int(getattr(cfg, 'num_jepa_layers', 1)) != 1:
+		raise ValueError('original_tdmpc2_implementation=True requires num_jepa_layers == 1')
 
 	# when the user tries to overwrite existing observations, ask for confirmation
 	if cfg.save_obs_for_rankme:
