@@ -1,6 +1,6 @@
 ## Why and How Auxiliary Tasks Improve JEPA Representations (P-JEPA)
 
-This repository contains the reference code for the paper “Why and How Auxiliary Tasks Improve JEPA Representations.” It implements a practical Joint-Embedding Predictive Architecture with an auxiliary regression head (P-JEPA) and provides a simple counting environment to reproduce the qualitative/quantitative findings in the paper.
+This repository contains the reference code for the paper “Why and How Auxiliary Tasks Improve JEPA Representations.” It implements a Joint-Embedding Predictive Architecture with an auxiliary regression head (P-JEPA) and provides a counting environment to reproduce the qualitative/quantitative findings in the paper.
 
 At a glance:
 - P-JEPA jointly trains an encoder E, latent dynamics T, and an auxiliary head P on top of latent states.
@@ -18,8 +18,8 @@ Please follow one of the two supported paths:
 
 ## Repository Layout (key files)
 
-- `tdmpc2/train.py`: Hydra entrypoint (default config: `concept_discovery_random`).
-- `tdmpc2/concept_discovery_*.yaml`: experiment configs used in the paper (P-JEPA, random auxiliary, reward-only, dense-reward, etc.).
+- `tdmpc2/train.py`: Hydra entrypoint (default config: `concept_discovery_P-JEPA`).
+- `tdmpc2/concept_discovery_*.yaml`: experiment configs used in the paper (P-JEPA, random auxiliary, reward-only, etc.).
 - `tdmpc2/envs/counting.py`: 64×64 RGB counting environment used in the experiments.
 - `tdmpc2/simple_encoding_space_monitor.py`: produces monitoring curves, t-SNE plots, and decoder reconstructions.
 - `tdmpc2/tdmpc2.py`, `tdmpc2/common/*`, `tdmpc2/trainer/*`: agent, training loop, and utilities derived from TD‑MPC2.
@@ -38,7 +38,7 @@ python tdmpc2/train.py --config-name <config_yaml_basename>
 Notes:
 - `task=counting4` in the configs sets the target count n=4; change to `countingk` to target another count.
 - `model_size` must be one of `[1, 5, 19, 48, 317]`. We used `5` in our runs.
-- Online runs do not use `data_dir`. Offline training is only for multi‑task datasets (`mt30`/`mt80`).
+- We only support online training. There are offline training code inherited from the TDMPC2 implementation, but they may not be compatible with the rest of the code.
 
 
 ### 1) P-JEPA with reward auxiliary (paper Fig. 1 first row)
@@ -52,7 +52,7 @@ python tdmpc2/train.py --config-name concept_discovery_P_JEPA
 
 ### 2) P-JEPA with random auxiliary (paper Fig. 1 second row)
 
-Uses a fixed 256‑D random function as the auxiliary. Prevents most collapse but does not organize by count.
+Uses a fixed 256‑D random function as the auxiliary. Prevents most collapse but the representation space does not organize by count.
 
 ```bash
 python tdmpc2/train.py --config-name concept_discovery_random
@@ -61,7 +61,7 @@ python tdmpc2/train.py --config-name concept_discovery_random
 
 ### 3) Reward‑only gradients to encoder (paper Fig. 1 third row)
 
-Encoder only receives reward loss gradients (no latent‑dynamics gradients). Leads to coarse separation.
+Encoder only receives reward loss gradients (no latent‑dynamics gradients).
 
 ```bash
 python tdmpc2/train.py --config-name concept_discovery_rewardonly
@@ -71,7 +71,7 @@ python tdmpc2/train.py --config-name concept_discovery_rewardonly
 ### Optional: Dense reward ablation
 
 ```bash
-python tdmpc2/train.py --config-name concept_discovery_dense model_size=5
+python tdmpc2/train.py --config-name concept_discovery_dense
 ```
 
 
@@ -79,11 +79,11 @@ python tdmpc2/train.py --config-name concept_discovery_dense model_size=5
 
 Under `tdmpc2/logs/${task}/${seed}/${exp_name}` you will find:
 
-- CSV logs: `train.csv`, `eval.csv` (episode reward/success, etc.).
-- `encoding_monitor/` from `SimpleEncodingSpaceMonitor`:
-  - `monitoring_curves.png`: encoding-space size, Jacobian rank, RankMe, decoder loss, cluster accuracy.
-  - `tsne_clusters.png` and `tsne_clusters_best.png` (if labels available; counting env only).
-  - `decoder_gifs/decoder_cmp_*_original_observation.jpg` and `..._reconstruction.jpg` (counting env) or GIFs in non-counting envs.
+- CSV logs: `train.csv`, `eval.csv` (training loss and evaluation reward).
+- `encoding_monitor/` which is produced by `SimpleEncodingSpaceMonitor` class:
+  - `monitoring_curves.png`: encoding-space size, cluster accuracy, etc.
+  - `tsne_clusters.png` and `tsne_clusters_best.png`: tSNE plots of encoding space.
+  - `decoder_gifs/decoder_cmp_*_original_observation.jpg` and `..._reconstruction.jpg`: observations from the environment and reconstructions
   - `models/latest_checkpoint.pt` and `models/best_checkpoint.pt` saved periodically.
 
 Tip: If you see a FileExistsError about `eval.csv`, change `exp_name` in your config or delete the old directory.
@@ -91,9 +91,7 @@ Tip: If you see a FileExistsError about `eval.csv`, change `exp_name` in your co
 
 ## Reproducing Paper Figures
 
-The three runs above correspond to Fig. 1 rows (a), (b), and (c) respectively. After each run reaches its best cluster compactness (as tracked by the monitor), use the artifacts in `encoding_monitor/` for:
-- PCA/2D viz: t-SNE plots are saved automatically; PCA and heatmap can be produced using tdmpc2/plot.py.
-- Decoder comparisons: compare `decoder_cmp_*_original_observation.jpg` vs `..._reconstruction.jpg`.
+Run the three runs above. Each run will produce a `baseline_encodings_best.pt`. Then pass them to `tdmpc2/plot.py` to generate the figures.
 
 
 ## Troubleshooting
