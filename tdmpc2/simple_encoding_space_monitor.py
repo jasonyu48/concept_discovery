@@ -518,6 +518,13 @@ class SimpleEncodingSpaceMonitor:
             space_size = self.pairwise_distance(self.baseline_encodings).mean().item()
             metrics['encoding_space_size'] = space_size
             self.monitoring_data['encoding_space_size'].append(space_size)
+            # First-layer encoding space size for this step
+            if self.first_layer_baseline_encodings is not None:
+                space_size_first = self.pairwise_distance(self.first_layer_baseline_encodings).mean().item()
+            else:
+                space_size_first = None
+            metrics['encoding_space_size_first'] = space_size_first
+            self.monitoring_data['encoding_space_size_first'].append(space_size_first)
             print(f"   Encoding space size: {space_size:.6f}")
 
         # Clustering accuracy metric (requires labels)
@@ -890,14 +897,23 @@ class SimpleEncodingSpaceMonitor:
 
         # Additional subplot: encoding space size (first vs top)
         if self.enable_encoding_space and 'encoding_space_size_first' in self.monitoring_data:
-            ess_top = np.array([v if v is not None else np.nan for v in self.monitoring_data['encoding_space_size']])
-            ess_first = np.array([v if v is not None else np.nan for v in self.monitoring_data['encoding_space_size_first']])
+            # Align lengths with steps (pad with NaN if necessary)
+            steps_arr = steps
+            ess_top_list = self.monitoring_data['encoding_space_size']
+            ess_first_list = self.monitoring_data['encoding_space_size_first']
+            # pad to same length as steps
+            if len(ess_top_list) < len(steps_arr):
+                ess_top_list = ess_top_list + [None] * (len(steps_arr) - len(ess_top_list))
+            if len(ess_first_list) < len(steps_arr):
+                ess_first_list = ess_first_list + [None] * (len(steps_arr) - len(ess_first_list))
+            ess_top = np.array([v if v is not None else np.nan for v in ess_top_list])
+            ess_first = np.array([v if v is not None else np.nan for v in ess_first_list])
             if (not np.all(np.isnan(ess_top))) or (not np.all(np.isnan(ess_first))):
                 ax = plt.subplot(rows, cols, subplot_idx)
                 if not np.all(np.isnan(ess_first)):
-                    ax.plot(steps, ess_first, label='first', color='tab:blue', linewidth=2)
+                    ax.plot(steps_arr, ess_first, label='first', color='tab:blue', linewidth=2)
                 if not np.all(np.isnan(ess_top)):
-                    ax.plot(steps, ess_top, label='top', color='tab:orange', linewidth=2)
+                    ax.plot(steps_arr, ess_top, label='top', color='tab:orange', linewidth=2)
                 ax.set_title('Encoding Space Size (first vs top)', fontsize=12, fontweight='bold')
                 ax.set_xlabel('Training Steps')
                 ax.set_ylabel('Avg. Pairwise Distance')
