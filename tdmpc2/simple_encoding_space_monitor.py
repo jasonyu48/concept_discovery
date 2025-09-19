@@ -870,7 +870,7 @@ class SimpleEncodingSpaceMonitor:
                 ax.set_title('Decoder Eval Loss', fontsize=12, fontweight='bold')
                 ax.set_xlabel('Training Steps')
                 ax.set_ylabel('MSE')
-                ax.set_yscale('log')
+                ax.set_ylim(0, 0.06)
                 ax.grid(True, alpha=0.3)
                 subplot_idx += 1
 
@@ -917,6 +917,7 @@ class SimpleEncodingSpaceMonitor:
                 ax.set_title('Encoding Space Size (first vs top)', fontsize=12, fontweight='bold')
                 ax.set_xlabel('Training Steps')
                 ax.set_ylabel('Avg. Pairwise Distance')
+                ax.set_ylim(0, 100)
                 ax.grid(True, alpha=0.3)
                 ax.legend()
             subplot_idx += 1
