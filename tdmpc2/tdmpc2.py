@@ -30,21 +30,29 @@ class TDMPC2(torch.nn.Module):
 		self.model = WorldModel(cfg).to(self.device)
 
 		# Build parameter groups for the main optimizer (optionally includes decoder)
-		param_groups = [
-			{'params': self.model._encoder.parameters(), 'lr': self.cfg.lr*self.cfg.enc_lr_scale},
-			# Multi-layer encoders (vector→vector)
-			{'params': self.model._enc_layers.parameters()} if hasattr(self.model, '_enc_layers') else {'params': []},
-			# Multi-layer dynamics (MLP per layer)
-			{'params': self.model._dyn_layers.parameters()} if hasattr(self.model, '_dyn_layers') else {'params': []},
-			{'params': self.model._reward.parameters()},
-			{'params': self.model._termination.parameters() if self.cfg.episodic else []},
-			{'params': self.model._Qs.parameters()},
-			{'params': self.model._task_emb.parameters() if self.cfg.multitask else []},
-			{'params': self.model._collapse_pred.parameters() if getattr(self.cfg, 'collapse_prevention', False) else []}
-		]
+		param_groups = []
+		# --- Encoders ---
+		L_layers = int(getattr(self.model, 'num_jepa_layers', 1))
+		# Base encoder (layer 0) – LR scaled by enc_lr_scale / L_layers
+		param_groups.append({'params': self.model._encoder.parameters(), 'lr': self.cfg.lr * self.cfg.enc_lr_scale / L_layers})
+		# Higher MLP encoders (layers 1..L-1) – per-layer scaling: enc_lr_scale * 1/(L-l)
+		if hasattr(self.model, '_enc_layers') and len(self.model._enc_layers) > 0:
+			for idx, enc_l in enumerate(self.model._enc_layers, start=1):
+				scale = 1 / max(L_layers - idx, 1)
+				param_groups.append({'params': enc_l.parameters(), 'lr': self.cfg.lr * self.cfg.enc_lr_scale * scale})
+		# --- Dynamics (per layer)
+		if hasattr(self.model, '_dyn_layers') and len(self.model._dyn_layers) > 0:
+			for dyn_l in self.model._dyn_layers:
+				param_groups.append({'params': dyn_l.parameters(), 'lr': self.cfg.lr})
+		# --- Other heads ---
+		param_groups.append({'params': self.model._reward.parameters()})
+		param_groups.append({'params': self.model._termination.parameters() if self.cfg.episodic else []})
+		param_groups.append({'params': self.model._Qs.parameters()})
+		param_groups.append({'params': self.model._task_emb.parameters() if self.cfg.multitask else []})
+		param_groups.append({'params': self.model._collapse_pred.parameters() if getattr(self.cfg, 'collapse_prevention', False) else []})
 		# Optional current reward head parameters
 		if getattr(self.cfg, 'current_reward', False):
-			# Include per-layer current reward heads when present
+			# Include per-layer current reward heads when present (no LR scaling per user spec)
 			if hasattr(self.model, '_reward_current_layers') and self.model._reward_current_layers is not None:
 				param_groups.append({'params': self.model._reward_current_layers.parameters()})
 			elif getattr(self.model, '_reward_current', None) is not None:
@@ -421,8 +429,8 @@ class TDMPC2(torch.nn.Module):
 					else:
 						z_pred = self.model.next_layer(z_t, _action, task, layer_idx=l)
 					consistency_loss = consistency_loss + F.mse_loss(z_pred, z_tp1_target) * self.cfg.rho**t
-			# Normalise by horizon and number of layers
-			consistency_loss = consistency_loss / (self.cfg.horizon * max(L_layers, 1))
+			# Normalise by horizon
+			consistency_loss = consistency_loss / (self.cfg.horizon)
 			# Use encoded top-layer sequence directly (no rollout) for control/actor-critic path
 			zs = enc_obs
 
@@ -483,7 +491,7 @@ class TDMPC2(torch.nn.Module):
 					for l in range(L_layers):
 						rew_curr_unbind_l = reward_current_preds[l][t]
 						layer_loss = layer_loss + math.soft_ce(rew_curr_unbind_l, pre_target_unbind, self.cfg).mean()
-					reward_curr_loss = reward_curr_loss + (layer_loss / max(L_layers,1)) * self.cfg.rho**t
+					reward_curr_loss = reward_curr_loss + (layer_loss) * self.cfg.rho**t
 				else:
 					rew_curr_unbind = reward_current_preds[t]
 					reward_curr_loss = reward_curr_loss + math.soft_ce(rew_curr_unbind, pre_target_unbind, self.cfg).mean() * self.cfg.rho**t
