@@ -91,7 +91,8 @@ class WorldModel(nn.Module):
 		self._enc_layers = nn.ModuleList([
 			layers.mlp(
 				cfg.latent_dim + (cfg.task_dim if cfg.multitask else 0),
-				max(cfg.num_enc_layers-1, 1)*[cfg.enc_dim],
+				# Use latent_dim as hidden width to match encoding space size
+				max(cfg.num_enc_layers-1, 1)*[cfg.latent_dim],
 				cfg.latent_dim,
 			)
 			for _ in range(max(self.num_jepa_layers-1, 0))

@@ -18,7 +18,7 @@ eval_episodes: 10
 eval_freq: 6_000
 
 # training
-steps: 300_000
+steps: 1_000_000
 batch_size: 256
 reward_coef: 10 # set to 10 for less fluctuation in cluster acc
 value_coef: 0.1
@@ -41,7 +41,7 @@ discount_min: 0.95
 discount_max: 0.995
 buffer_size: 100_000
 q_sample_ratio: 1.0  # Ratio of buffer data visible to Q-function and collapse prevention training (0.0-1.0)
-exp_name: concept_discovery_multi_P_JEPA_10_layers
+exp_name: concept_discovery_multi_P_JEPA_20_layers
 train_print_freq: 100  # print training episodes every 100 episodes instead of every episode
 data_dir: ???
 JEPA_sg: false
@@ -101,7 +101,7 @@ vmax: +10
 model_size: ???
 encoder_arch: resnet
 num_enc_layers: 3
-enc_dim: 512
+enc_dim: 512 # dim of hidden layer of mlp encoder
 enc_layernorm: false
 enc_shiftaug: false
 num_channels: 32
@@ -116,7 +116,7 @@ collapsed_encoder_init: false  # initialise RGB MLP encoder in collapsed mode
 task_dim: 96
 num_q: 1
 dropout: 0.01
-num_jepa_layers: 10   # NEW: number of stacked P-JEPA layers (E1=ResNet, later=MLP)
+num_jepa_layers: 20   # NEW: number of stacked P-JEPA layers (E1=ResNet, later=MLP)
 
 # logging
 wandb_project: ???
