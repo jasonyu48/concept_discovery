@@ -46,6 +46,8 @@ class SimpleEncodingSpaceMonitor:
         self.buffer = buffer  # replay buffer reference (may be None for offline use)
         self.save_dir = Path(save_dir) if save_dir else Path("simple_encoding_logs")
         self.save_dir.mkdir(exist_ok=True)
+        # Store top and first-layer encodings for baseline snapshots
+        self.first_layer_baseline_encodings = None
         
         # Unified batch size for all monitoring-related computations (encoding, distances, RankMe, etc.)
         self.monitor_batch_size = getattr(self.cfg, 'monitor_batch_size', 1024)  # <------------ try to decrease this if not enough memory
@@ -100,6 +102,7 @@ class SimpleEncodingSpaceMonitor:
         # Add metric storage based on enabled flags
         if self.enable_encoding_space:
             self.monitoring_data['encoding_space_size'] = []
+            self.monitoring_data['encoding_space_size_first'] = []
         if self.enable_jacobian_rank:
             self.monitoring_data['min_jacobian_rank'] = []
         if self.enable_rankme:
@@ -118,6 +121,7 @@ class SimpleEncodingSpaceMonitor:
             self.monitoring_data['cluster_acc_top'] = []          # top layer
             # Track the best cluster accuracy encountered so far for saving the best t-SNE plot
             self.best_cluster_acc = float('-inf')
+            self.best_cluster_acc_first = float('-inf')
         
         # Storage for per-count action distributions (for continuous 1-D case)
         self.monitoring_data['action_dist_plot_saved'] = []
@@ -155,6 +159,13 @@ class SimpleEncodingSpaceMonitor:
             initial_space_size = self.pairwise_distance(self.baseline_encodings).mean().item()
             print(f"📏 Initial encoding space size: {initial_space_size:.3e}")
             self.monitoring_data['encoding_space_size'].append(initial_space_size)
+            # First-layer encoding space size
+            # Use cached first-layer encodings when available
+            if self.first_layer_baseline_encodings is not None:
+                initial_space_size_first = self.pairwise_distance(self.first_layer_baseline_encodings).mean().item()
+                self.monitoring_data['encoding_space_size_first'].append(initial_space_size_first)
+            else:
+                self.monitoring_data['encoding_space_size_first'].append(None)
 
         if self.enable_jacobian_rank:
             initial_min_rank = self.compute_min_jacobian_rank(self.baseline_observations)
@@ -355,15 +366,24 @@ class SimpleEncodingSpaceMonitor:
         
         
     def _update_baseline_encodings(self):
-        """Update baseline encodings with current encoder state"""
+        """Update baseline encodings.
+        Computes top and first-layer encodings in one pass using encode_all_layers when available.
+        """
         with torch.no_grad():
-            # Handle both single-task and multi-task encoders
             if self.cfg.multitask:
                 raise NotImplementedError("monitor not implemented for multi-task encoders")
+            # Prefer encode_all_layers from the agent model to get first/top at once
+            if hasattr(self.agent, 'model') and hasattr(self.agent.model, 'encode_all_layers'):
+                print(f"🔍 Updating baseline encodings (first & top) via encode_all_layers")
+                z_layers = self.agent.model.encode_all_layers(self.baseline_observations.to(self.device), task=None)
+                self._last_z_layers = z_layers
+                self.first_layer_baseline_encodings = z_layers[0]
+                self.baseline_encodings = z_layers[-1]
             else:
-                # Single-task encoder (direct call)
-                print(f"🔍 Updating baseline encodings with single-task encoder")
+                # Fallback: use provided encoder (top) only
+                print(f"🔍 Updating baseline encodings with provided encoder (top only)")
                 self.baseline_encodings = self.encoder(self.baseline_observations)
+                self._last_z_layers = None
     
     def pairwise_distance(self, encodings: torch.Tensor) -> torch.Tensor:
         """Compute average pairwise distance in encoding space"""
@@ -504,8 +524,12 @@ class SimpleEncodingSpaceMonitor:
         if self.enable_cluster_acc and self.baseline_labels is not None:
             try:
                 # Compute per-layer encodings for first, middle, and top layers
-                with torch.no_grad():
-                    z_layers = self.agent.model.encode_all_layers(self.baseline_observations.to(self.device), task=None)
+                # Use cached layer encodings from _update_baseline_encodings when available
+                if hasattr(self, '_last_z_layers') and self._last_z_layers is not None:
+                    z_layers = self._last_z_layers
+                else:
+                    with torch.no_grad():
+                        z_layers = self.agent.model.encode_all_layers(self.baseline_observations.to(self.device), task=None)
                 L = len(z_layers)
                 idx_first = 0
                 idx_mid = L // 2
@@ -594,13 +618,28 @@ class SimpleEncodingSpaceMonitor:
             except Exception as e:
                 print(f"   ⚠️ Failed to generate encoding space curve: {e}")
 
-            # --- NEW: t-SNE cluster visualisation (if labels available) ---
+            # --- NEW: t-SNE cluster visualisations (top and first layers, if labels available) ---
             if self.enable_cluster_acc and self.baseline_labels is not None:
                 try:
+                    # Top-layer t-SNE (existing)
                     self._plot_tsne_clusters(save_path=self.save_dir / "tsne_clusters.png", cluster_acc=cluster_acc_computed)
-                    print("   📐 t-SNE cluster plot updated!")
+                    # First-layer t-SNE using cached first-layer encodings, with unified function
+                    if self.first_layer_baseline_encodings is not None:
+                        try:
+                            acc_first = self._compute_cluster_accuracy(self.first_layer_baseline_encodings, self.baseline_labels)
+                        except Exception:
+                            acc_first = None
+                        self._plot_tsne_clusters(
+                            save_path=self.save_dir / "tsne_clusters_first.png",
+                            cluster_acc=acc_first,
+                            enc=self.first_layer_baseline_encodings,
+                            labels=self.baseline_labels,
+                            best_attr_name='best_cluster_acc_first',
+                            best_suffix='tsne_clusters_first_best.png',
+                        )
+                    print("   📐 t-SNE cluster plots updated (top & first if available)!")
                 except Exception as e:
-                    print(f"   ⚠️ Failed to generate t-SNE plot: {e}")
+                    print(f"   ⚠️ Failed to generate t-SNE plots: {e}")
             
             # --- NEW: Action distribution heatmap when cluster accuracy is high ---
             try:
@@ -849,6 +888,23 @@ class SimpleEncodingSpaceMonitor:
                 ax.legend()
             subplot_idx += 1
 
+        # Additional subplot: encoding space size (first vs top)
+        if self.enable_encoding_space and 'encoding_space_size_first' in self.monitoring_data:
+            ess_top = np.array([v if v is not None else np.nan for v in self.monitoring_data['encoding_space_size']])
+            ess_first = np.array([v if v is not None else np.nan for v in self.monitoring_data['encoding_space_size_first']])
+            if (not np.all(np.isnan(ess_top))) or (not np.all(np.isnan(ess_first))):
+                ax = plt.subplot(rows, cols, subplot_idx)
+                if not np.all(np.isnan(ess_first)):
+                    ax.plot(steps, ess_first, label='first', color='tab:blue', linewidth=2)
+                if not np.all(np.isnan(ess_top)):
+                    ax.plot(steps, ess_top, label='top', color='tab:orange', linewidth=2)
+                ax.set_title('Encoding Space Size (first vs top)', fontsize=12, fontweight='bold')
+                ax.set_xlabel('Training Steps')
+                ax.set_ylabel('Avg. Pairwise Distance')
+                ax.grid(True, alpha=0.3)
+                ax.legend()
+            subplot_idx += 1
+
         # Additional plot: training losses from train.csv (reward_loss, consistency_loss)
         try:
             train_csv = f"{self.cfg.work_dir}/train.csv"
@@ -863,7 +919,7 @@ class SimpleEncodingSpaceMonitor:
                 ax.set_title('Training Losses', fontsize=12, fontweight='bold')
                 ax.set_xlabel('Training Steps')
                 ax.set_ylabel('Loss')
-                ax.set_ylim(0.0, 0.01)
+                ax.set_ylim(0.0, 0.2)
                 ax.grid(True, alpha=0.3)
                 ax.legend()
         except Exception as e:
@@ -1508,13 +1564,15 @@ class SimpleEncodingSpaceMonitor:
     # Helper: t-SNE cluster visualisation
     # -------------------------------------------------------------
 
-    def _plot_tsne_clusters(self, save_path, cluster_acc: Optional[float] = None):
-        """Generate a 2-D t-SNE plot of current baseline encodings coloured by labels and save
-        both the latest plot and the best-accuracy plot.
-        
-        Args:
-            save_path: Path to write the *latest* plot.
-            cluster_acc: Pre–computed cluster accuracy to show in title and to decide best plot.
+    def _plot_tsne_clusters(self, save_path,
+                            cluster_acc: Optional[float] = None,
+                            enc: Optional[torch.Tensor] = None,
+                            labels: Optional[torch.Tensor] = None,
+                            best_attr_name: Optional[str] = None,
+                            best_suffix: Optional[str] = None):
+        """Generate a 2-D t-SNE plot.
+        - If enc/labels are None: use self.baseline_encodings/self.baseline_labels and track best via self.best_cluster_acc.
+        - If enc/labels are provided: plot for that layer; best tracking uses best_attr_name/best_suffix when provided.
         """
         try:
             from sklearn.manifold import TSNE
@@ -1522,17 +1580,23 @@ class SimpleEncodingSpaceMonitor:
             print("⚠️ scikit-learn not installed; cannot generate t-SNE plot.")
             return
 
-        if self.baseline_labels is None:
-            print("⚠️ No labels available for t-SNE clustering plot.")
-            return
+        if enc is None or labels is None:
+            if self.baseline_labels is None:
+                print("⚠️ No labels available for t-SNE clustering plot.")
+                return
+            z = self.baseline_encodings.detach().cpu().numpy()
+            labs = self.baseline_labels.detach().cpu().numpy()
+            # Default best tracking for top layer
+            best_attr_name = 'best_cluster_acc' if best_attr_name is None else best_attr_name
+            best_suffix = 'tsne_clusters_best.png' if best_suffix is None else best_suffix
+        else:
+            z = enc.detach().cpu().numpy()
+            labs = labels.detach().cpu().numpy()
+            if best_attr_name is None:
+                best_attr_name = 'best_cluster_acc'
+            if best_suffix is None:
+                best_suffix = 'tsne_clusters_best.png'
 
-        # -------------------------------------------------
-        # Compute t-SNE embedding
-        # -------------------------------------------------
-        z = self.baseline_encodings.detach().cpu().numpy()
-        labels = self.baseline_labels.detach().cpu().numpy()
-
-        # Use provided cluster accuracy (do NOT recompute). If not supplied, fall back to NaN.
         if cluster_acc is None:
             cluster_acc = float('nan')
 
@@ -1540,7 +1604,7 @@ class SimpleEncodingSpaceMonitor:
         z_2d = tsne.fit_transform(z)
 
         plt.figure(figsize=(6, 5))
-        unique_labels = sorted(set(labels))
+        unique_labels = sorted(set(labs))
         num_classes = len(unique_labels)
 
         # Choose a *categorical* palette with visually distinct colours.
@@ -1555,7 +1619,7 @@ class SimpleEncodingSpaceMonitor:
         colors = [base_cmap(i % base_cmap.N) for i in range(num_classes)]
 
         for cls, col in zip(unique_labels, colors):
-            idx = labels == cls
+            idx = labs == cls
             plt.scatter(z_2d[idx, 0], z_2d[idx, 1], s=10, alpha=0.85, label=str(cls), color=col)
         plt.legend(title="Label")
         # Show cluster accuracy (if available) in title
@@ -1564,18 +1628,13 @@ class SimpleEncodingSpaceMonitor:
         else:
             plt.title("t-SNE Latent Space")
         plt.tight_layout()
-
-        # -------------------------------------------------
-        # Save latest plot
-        # -------------------------------------------------
         plt.savefig(save_path, dpi=300)
 
-        # -------------------------------------------------
-        # Save best-so-far plot (highest cluster accuracy)
-        # -------------------------------------------------
-        if not np.isnan(cluster_acc) and cluster_acc > getattr(self, 'best_cluster_acc', float('-inf')):
-            self.best_cluster_acc = cluster_acc
-            best_path = Path(save_path).with_name("tsne_clusters_best.png")
+        # Save best-so-far plot (highest cluster accuracy) for selected layer
+        prev_best = getattr(self, best_attr_name, float('-inf'))
+        if not np.isnan(cluster_acc) and cluster_acc > prev_best:
+            setattr(self, best_attr_name, cluster_acc)
+            best_path = Path(save_path).with_name(best_suffix)
             plt.savefig(best_path, dpi=300)
             print(f"🔥 New best cluster accuracy {cluster_acc*100:.2f}% → saved to {best_path}")
 
