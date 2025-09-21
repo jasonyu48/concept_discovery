@@ -96,6 +96,33 @@ class WorldModel(nn.Module):
 			)
 			for _ in range(max(self.num_jepa_layers-1, 0))
 		])
+		# --- Commutative encoders (optional) ---
+		self.num_commutative_encoders = int(getattr(cfg, 'num_commutative_encoders', 0))
+		if self.num_commutative_encoders > 0 and cfg.obs == 'rgb':
+			# E_i: ResNet encoders producing latent_dim
+			self._comm_encoders = nn.ModuleList([
+				layers.ResNetEncoder(cfg) for _ in range(self.num_commutative_encoders)
+			])
+			# c_i: MLP maps latent_dim -> latent_dim
+			self._comm_maps = nn.ModuleList([
+				layers.mlp(cfg.latent_dim, [], cfg.latent_dim) for _ in range(self.num_commutative_encoders)
+			])
+			# Per-commutative latent dynamics T_i: (z_i, a, [task]) -> z_i'
+			in_dim_full = cfg.latent_dim + cfg.action_dim + (cfg.task_dim if cfg.multitask else 0)
+			self._comm_dyns = nn.ModuleList([
+				layers.mlp(in_dim_full, getattr(cfg, "dyn_dims", cfg.mlp_dim), cfg.latent_dim)
+				for _ in range(self.num_commutative_encoders)
+			])
+			# Per-commutative current reward heads P_current_i: (z_i, [task]) -> num_bins
+			self._reward_current_comm = nn.ModuleList([
+				layers.mlp(cfg.latent_dim + (cfg.task_dim if cfg.multitask else 0), 2*[cfg.mlp_dim], max(cfg.num_bins, 1))
+				for _ in range(self.num_commutative_encoders)
+			])
+		else:
+			self._comm_encoders = None
+			self._comm_maps = None
+			self._comm_dyns = None
+			self._reward_current_comm = None
 		# --- Transition / Dynamics model selection ---
 		dyn_arch = getattr(cfg, "dynamics_arch", "iresnet")  # default to iresnet
 		# --- Select dynamics architecture ---
@@ -230,6 +257,12 @@ class WorldModel(nn.Module):
 				for idx, r_l in enumerate(self._reward_current_layers, start=1):
 					repr += f"  P_current{idx}: {r_l}\n"
 			repr += "Control latent: top layer\n"
+		# Commutative encoders section (if configured)
+		if getattr(self, 'num_commutative_encoders', 0) > 0 and getattr(self, '_comm_encoders', None) is not None:
+			repr += f"Commutative encoders: N={self.num_commutative_encoders}\n"
+			for i, (e_i, c_i) in enumerate(zip(self._comm_encoders, self._comm_maps), start=1):
+				repr += f"  E_comm{i}: {e_i}\n"
+				repr += f"  c{i}: {c_i}\n"
 		# Optionally include current-reward head in the printed architecture
 		if getattr(self.cfg, 'current_reward', False) and getattr(self, '_reward_current', None) is not None:
 			repr += f"Current reward: {self._reward_current}\n"
@@ -266,6 +299,12 @@ class WorldModel(nn.Module):
 			if getattr(self.cfg, 'current_reward', False) and getattr(self, '_reward_current_layers', None) is not None:
 				rc_layers_params = sum(count_params(m) for m in self._reward_current_layers)
 				param_breakdown.append(("Current reward (all layers)", rc_layers_params))
+		# Commutative encoders parameter summaries
+		if getattr(self, 'num_commutative_encoders', 0) > 0 and getattr(self, '_comm_encoders', None) is not None:
+			comm_enc_params = sum(count_params(m) for m in self._comm_encoders)
+			comm_map_params = sum(count_params(m) for m in self._comm_maps)
+			param_breakdown.append(("Commutative encoders (sum)", comm_enc_params))
+			param_breakdown.append(("Commutative maps c_i (sum)", comm_map_params))
 		repr += "\nParameter breakdown:"
 		for name, n in param_breakdown:
 			repr += f"\n{name}: {n:,}"
@@ -385,6 +424,52 @@ class WorldModel(nn.Module):
 			z_prev = enc_l(z_in)
 			zs.append(z_prev)
 		return zs
+
+	def encode_e0(self, obs, task):
+		"""Convenience: return top-layer latent E_0(obs)."""
+		return self.encode(obs, task)
+
+	def encode_comm_all(self, obs, task):
+		"""Return list [E_1(obs), ..., E_N(obs)] for commutative encoders.
+		Preserves leading (T,B) dims for RGB sequences.
+		"""
+		assert self._comm_encoders is not None, "No commutative encoders configured"
+		if self.cfg.multitask:
+			obs = self.task_emb(obs, task)
+		outs = []
+		if self.cfg.obs == 'rgb' and obs.ndim == 5:
+			leading_dims = obs.shape[:2]
+			flat_obs = obs.reshape(-1, *obs.shape[-3:])
+			for enc_i in self._comm_encoders:
+				flat_enc = enc_i(flat_obs)
+				outs.append(flat_enc.reshape(*leading_dims, -1))
+			return outs
+		# Non-RGB: directly apply
+		for enc_i in self._comm_encoders:
+			outs.append(enc_i(obs))
+		return outs
+
+	def comm_map_all(self, zs_list):
+		"""Apply c_i to each z_i in zs_list, shape preserved."""
+		assert self._comm_maps is not None, "No commutative maps configured"
+		return [c_i(z_i) for c_i, z_i in zip(self._comm_maps, zs_list)]
+
+	def next_comm(self, z, a, task, idx: int):
+		"""Per-commutative transition: z_i, a -> z'_i using dynamics of comm encoder idx."""
+		assert self._comm_dyns is not None, "No commutative dynamics configured"
+		if self.cfg.multitask:
+			z = self.task_emb(z, task)
+		z_in = torch.cat([z, a], dim=-1)
+		z_next = self._comm_dyns[idx](z_in)
+		if getattr(self.cfg, 'latent_noise', False) and self.training:
+			z_next = z_next + 0.1 * torch.randn_like(z_next)
+		return z_next
+
+	def reward_current_comm(self, z, task, idx: int):
+		"""Per-commutative current reward from z_i."""
+		assert self._reward_current_comm is not None, 'current_reward comm layers are disabled'
+		zin = self.task_emb(z, task) if self.cfg.multitask else z
+		return self._reward_current_comm[idx](zin)
 
 	def next(self, z, a, task):
 		"""

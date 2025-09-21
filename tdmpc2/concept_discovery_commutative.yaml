@@ -24,6 +24,7 @@ reward_coef: 10 # set to 10 for less fluctuation in cluster acc
 value_coef: 0.1
 termination_coef: 1
 consistency_coef: 2
+L_eq_coef: 1.0
 pi_coef: 0.11
 shrink_coef: 0.0 # harmful, do not use
 collapse_prevention: false  # enable/disable random phenomenon function 
@@ -41,7 +42,7 @@ discount_min: 0.95
 discount_max: 0.995
 buffer_size: 100_000
 q_sample_ratio: 1.0  # Ratio of buffer data visible to Q-function and collapse prevention training (0.0-1.0)
-exp_name: concept_discovery_multi_P_JEPA_20_layers8_larger_lr
+exp_name: concept_discovery_commutative
 train_print_freq: 100  # print training episodes every 100 episodes instead of every episode
 data_dir: ???
 JEPA_sg: false
@@ -59,7 +60,7 @@ compile: false
 save_video: false
 save_agent: true
 seed: 2022
-monitor_freq: 6000  #6000
+monitor_freq: 1001  #6000
 dim_monitor_steps: 30_000
 simnorm: false
 simnorm_dim: 8
@@ -116,7 +117,9 @@ task_dim: 96
 num_q: 1
 dropout: 0.01
 num_jepa_layers: 1
-num_jepa_encoders: 3 # New: number of commutative encoders
+num_jepa_encoders: 1 # New: number of commutative encoders
+num_commutative_encoders: 3 # New: number of commutative encoders
+
 
 # logging
 wandb_project: ???

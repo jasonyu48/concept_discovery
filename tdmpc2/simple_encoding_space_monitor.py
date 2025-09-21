@@ -48,6 +48,14 @@ class SimpleEncodingSpaceMonitor:
         self.save_dir.mkdir(exist_ok=True)
         # Store top and first-layer encodings for baseline snapshots
         self.first_layer_baseline_encodings = None
+        # Commutative encoders monitoring caches (E0 and two selected Ei)
+        self.e0_baseline = None
+        self.ei_baselines = None
+        self.comm_indices = getattr(self.cfg, 'comm_indices_for_monitor', None)
+        # Initialize commutative monitoring attributes to avoid attribute errors
+        self.e0_baseline = None
+        self.ei_baselines = None
+        self.comm_indices = getattr(self.cfg, 'comm_indices_for_monitor', None)
         
         # Unified batch size for all monitoring-related computations (encoding, distances, RankMe, etc.)
         self.monitor_batch_size = getattr(self.cfg, 'monitor_batch_size', 1024)  # <------------ try to decrease this if not enough memory
@@ -379,11 +387,25 @@ class SimpleEncodingSpaceMonitor:
                 self._last_z_layers = z_layers
                 self.first_layer_baseline_encodings = z_layers[0]
                 self.baseline_encodings = z_layers[-1]
+                # Also refresh commutative encoder baselines on every update, if configured
+                if hasattr(self.agent.model, 'encode_comm_all') and int(getattr(self.agent.model, 'num_commutative_encoders', 0)) > 0:
+                    e0 = self.agent.model.encode_e0(self.baseline_observations.to(self.device), task=None)
+                    z_comm = self.agent.model.encode_comm_all(self.baseline_observations.to(self.device), task=None)
+                    N = len(z_comm)
+                    if self.comm_indices is None or not isinstance(self.comm_indices, (list, tuple)) or len(self.comm_indices) != 2:
+                        idx_a, idx_b = 0, max(N-1, 0)
+                    else:
+                        idx_a = max(0, min(N-1, int(self.comm_indices[0])))
+                        idx_b = max(0, min(N-1, int(self.comm_indices[1])))
+                    self.e0_baseline = e0
+                    self.ei_baselines = [z_comm[idx_a], z_comm[idx_b]]
             else:
                 # Fallback: use provided encoder (top) only
                 print(f"🔍 Updating baseline encodings with provided encoder (top only)")
                 self.baseline_encodings = self.encoder(self.baseline_observations)
                 self._last_z_layers = None
+                self.e0_baseline = None
+                self.ei_baselines = None
     
     def pairwise_distance(self, encodings: torch.Tensor) -> torch.Tensor:
         """Compute average pairwise distance in encoding space"""
@@ -562,12 +584,52 @@ class SimpleEncodingSpaceMonitor:
                 self.monitoring_data['cluster_acc_first'].append(None)
                 self.monitoring_data['cluster_acc_mid'].append(None)
                 self.monitoring_data['cluster_acc_top'].append(None)
+            # Commutative encoders: e0 vs two E_i (use cached baselines from _update_baseline_encodings)
+            if (
+                hasattr(self.agent.model, 'num_commutative_encoders') and
+                int(getattr(self.agent.model, 'num_commutative_encoders', 0)) > 0 and
+                self.e0_baseline is not None and self.ei_baselines is not None and len(self.ei_baselines) == 2
+            ):
+                try:
+                    acc_e0 = self._compute_cluster_accuracy(self.e0_baseline, self.baseline_labels)
+                    acc_ei_a = self._compute_cluster_accuracy(self.ei_baselines[0], self.baseline_labels)
+                    acc_ei_b = self._compute_cluster_accuracy(self.ei_baselines[1], self.baseline_labels)
+                except Exception as e:
+                    print(f"⚠️ Failed to compute commutative cluster accuracies: {e}")
+                    acc_e0 = acc_ei_a = acc_ei_b = None
+                self.monitoring_data.setdefault('cluster_acc_e0', []).append(acc_e0)
+                self.monitoring_data.setdefault('cluster_acc_ei_a', []).append(acc_ei_a)
+                self.monitoring_data.setdefault('cluster_acc_ei_b', []).append(acc_ei_b)
+            else:
+                self.monitoring_data.setdefault('cluster_acc_e0', []).append(None)
+                self.monitoring_data.setdefault('cluster_acc_ei_a', []).append(None)
+                self.monitoring_data.setdefault('cluster_acc_ei_b', []).append(None)
         elif self.enable_cluster_acc:
             self.monitoring_data['cluster_acc'].append(None)
             self.monitoring_data['cluster_acc_first'].append(None)
             self.monitoring_data['cluster_acc_mid'].append(None)
             self.monitoring_data['cluster_acc_top'].append(None)
+            self.monitoring_data.setdefault('cluster_acc_e0', []).append(None)
+            self.monitoring_data.setdefault('cluster_acc_ei_a', []).append(None)
+            self.monitoring_data.setdefault('cluster_acc_ei_b', []).append(None)
         
+        # Commutative encoding space sizes (record at monitor_step time)
+        if self.enable_encoding_space:
+            if self.e0_baseline is not None and self.ei_baselines is not None and len(self.ei_baselines) == 2:
+                try:
+                    ess_e0 = self.pairwise_distance(self.e0_baseline).mean().item()
+                    ess_ei_a = self.pairwise_distance(self.ei_baselines[0]).mean().item()
+                    ess_ei_b = self.pairwise_distance(self.ei_baselines[1]).mean().item()
+                except Exception as e:
+                    ess_e0 = ess_ei_a = ess_ei_b = float('nan')
+                self.monitoring_data.setdefault('encoding_space_size_e0', []).append(ess_e0)
+                self.monitoring_data.setdefault('encoding_space_size_ei_a', []).append(ess_ei_a)
+                self.monitoring_data.setdefault('encoding_space_size_ei_b', []).append(ess_ei_b)
+            else:
+                self.monitoring_data.setdefault('encoding_space_size_e0', []).append(None)
+                self.monitoring_data.setdefault('encoding_space_size_ei_a', []).append(None)
+                self.monitoring_data.setdefault('encoding_space_size_ei_b', []).append(None)
+
         if self.enable_jacobian_rank:
             min_rank = self.compute_min_jacobian_rank(self.baseline_observations)
             metrics['min_jacobian_rank'] = float(min_rank)
@@ -788,26 +850,58 @@ class SimpleEncodingSpaceMonitor:
 
         steps = np.array(self.monitoring_data['steps'])
         
+        # Attempt to preload training losses for inclusion in main grid
+        train_losses_df = None
+        include_train_losses = False
+        try:
+            train_csv = f"{self.cfg.work_dir}/train.csv"
+            df_train_try = pd.read_csv(train_csv)
+            if {'step', 'reward_loss', 'consistency_loss'}.issubset(df_train_try.columns):
+                train_losses_df = df_train_try
+                include_train_losses = True
+        except Exception:
+            include_train_losses = False
+
         # Count enabled metrics to determine subplot layout
-        enabled_metrics = [self.enable_encoding_space, self.enable_jacobian_rank, 
-                          self.enable_rankme, self.enable_eval_reward, self.enable_decoder_loss, self.enable_cluster_acc]
+        enabled_metrics = [
+            self.enable_encoding_space,
+            self.enable_jacobian_rank,
+            self.enable_rankme,
+            self.enable_eval_reward,
+            self.enable_decoder_loss,
+            self.enable_cluster_acc,
+        ]
         num_enabled = sum(enabled_metrics)
-        
-        if num_enabled == 0:
+
+        # Also account for additional subplots rendered below (beyond the base metrics)
+        additional_plots = 0
+        if self.enable_encoding_space and 'encoding_space_size_first' in self.monitoring_data:
+            additional_plots += 1
+        if self.enable_cluster_acc and 'cluster_acc_e0' in self.monitoring_data:
+            additional_plots += 1
+        if self.enable_encoding_space and 'encoding_space_size_e0' in self.monitoring_data:
+            additional_plots += 1
+        if include_train_losses:
+            additional_plots += 1
+
+        total_plots = num_enabled + additional_plots
+
+        if total_plots == 0:
             print("No metrics enabled for plotting")
             return None
             
-        # Determine subplot layout
-        if num_enabled == 1:
+        # Determine subplot layout sized for all attempted subplots
+        if total_plots <= 1:
             rows, cols = 1, 1
-        elif num_enabled == 2:
+        elif total_plots <= 2:
             rows, cols = 1, 2
-        elif num_enabled <= 3:
+        elif total_plots <= 4:
             rows, cols = 2, 2
-        elif num_enabled <= 6:
+        elif total_plots <= 6:
             rows, cols = 2, 3
         else:
-            rows, cols = 3, 3  # fallback
+            # Up to 9 plots expected (includes extra comparison/commutative panels)
+            rows, cols = 3, 3
         
         subplot_idx = 1
         
@@ -922,25 +1016,67 @@ class SimpleEncodingSpaceMonitor:
                 ax.legend()
             subplot_idx += 1
 
-        # Additional plot: training losses from train.csv (reward_loss, consistency_loss)
-        try:
-            train_csv = f"{self.cfg.work_dir}/train.csv"
-            df_train = pd.read_csv(train_csv)
-            if {'step', 'reward_loss', 'consistency_loss'}.issubset(df_train.columns):
-                # If there is no remaining subplot space, add a new figure
-                if subplot_idx == 1:
-                    plt.figure(figsize=(6, 4))
-                ax = plt.subplot(rows, cols, min(subplot_idx, rows*cols))
-                ax.plot(df_train['step'], df_train['reward_loss'], label='reward_loss', color='tab:blue')
-                ax.plot(df_train['step'], df_train['consistency_loss'], label='consistency_loss', color='tab:red')
-                ax.set_title('Training Losses', fontsize=12, fontweight='bold')
+        # Subplot: Commutative encoders cluster accuracy (E0 vs Ei_a/Ei_b)
+        if self.enable_cluster_acc and 'cluster_acc_e0' in self.monitoring_data:
+            steps_arr = steps
+            def _pad(vs):
+                return vs + [None] * (len(steps_arr) - len(vs)) if len(vs) < len(steps_arr) else vs
+            e0 = np.array([v if v is not None else np.nan for v in _pad(self.monitoring_data['cluster_acc_e0'])])
+            ei_a = np.array([v if v is not None else np.nan for v in _pad(self.monitoring_data['cluster_acc_ei_a'])])
+            ei_b = np.array([v if v is not None else np.nan for v in _pad(self.monitoring_data['cluster_acc_ei_b'])])
+            if (not np.all(np.isnan(e0))) or (not np.all(np.isnan(ei_a))) or (not np.all(np.isnan(ei_b))):
+                ax = plt.subplot(rows, cols, subplot_idx)
+                if not np.all(np.isnan(e0)):
+                    ax.plot(steps_arr, e0 * 100, label='E0', linewidth=2)
+                if not np.all(np.isnan(ei_a)):
+                    ax.plot(steps_arr, ei_a * 100, label='Ei_a', linewidth=2)
+                if not np.all(np.isnan(ei_b)):
+                    ax.plot(steps_arr, ei_b * 100, label='Ei_b', linewidth=2)
+                ax.set_title('Commutative Cluster Accuracy (E0 vs Ei)', fontsize=12, fontweight='bold')
                 ax.set_xlabel('Training Steps')
-                ax.set_ylabel('Loss')
-                ax.set_ylim(0.0, 0.2)
+                ax.set_ylabel('Accuracy (%)')
+                ax.set_ylim(0, 100)
                 ax.grid(True, alpha=0.3)
                 ax.legend()
-        except Exception as e:
-            print(f"⚠️ Could not plot training losses: {e}")
+            subplot_idx += 1
+
+        # Subplot: Commutative encoders encoding space size (E0 vs Ei_a/Ei_b)
+        if self.enable_encoding_space and 'encoding_space_size_e0' in self.monitoring_data:
+            steps_arr = steps
+            def _pad2(vs):
+                return vs + [None] * (len(steps_arr) - len(vs)) if len(vs) < len(steps_arr) else vs
+            e0s = np.array([v if v is not None else np.nan for v in _pad2(self.monitoring_data.get('encoding_space_size_e0', []))])
+            eas = np.array([v if v is not None else np.nan for v in _pad2(self.monitoring_data.get('encoding_space_size_ei_a', []))])
+            ebs = np.array([v if v is not None else np.nan for v in _pad2(self.monitoring_data.get('encoding_space_size_ei_b', []))])
+            if (not np.all(np.isnan(e0s))) or (not np.all(np.isnan(eas))) or (not np.all(np.isnan(ebs))):
+                ax = plt.subplot(rows, cols, subplot_idx)
+                if not np.all(np.isnan(e0s)):
+                    ax.plot(steps_arr, e0s, label='E0', linewidth=2)
+                if not np.all(np.isnan(eas)):
+                    ax.plot(steps_arr, eas, label='Ei_a', linewidth=2)
+                if not np.all(np.isnan(ebs)):
+                    ax.plot(steps_arr, ebs, label='Ei_b', linewidth=2)
+                ax.set_title('Commutative Encoding Space Size', fontsize=12, fontweight='bold')
+                ax.set_xlabel('Training Steps')
+                ax.set_ylabel('Avg. Pairwise Distance')
+                ax.grid(True, alpha=0.3)
+                ax.legend()
+            subplot_idx += 1
+
+        # Additional subplot: training losses in main grid (reward_loss, consistency_loss, L_eq)
+        if include_train_losses and train_losses_df is not None:
+            ax = plt.subplot(rows, cols, subplot_idx)
+            ax.plot(train_losses_df['step'], train_losses_df['reward_loss'], label='reward_loss', color='tab:blue')
+            ax.plot(train_losses_df['step'], train_losses_df['consistency_loss'], label='consistency_loss', color='tab:red')
+            if 'L_eq' in train_losses_df.columns:
+                ax.plot(train_losses_df['step'], train_losses_df['L_eq'], label='L_eq', color='tab:purple')
+            ax.set_title('Training Losses', fontsize=12, fontweight='bold')
+            ax.set_xlabel('Training Steps')
+            ax.set_ylabel('Loss')
+            ax.set_ylim(0.0, 0.2)
+            ax.grid(True, alpha=0.3)
+            ax.legend()
+            subplot_idx += 1
 
         plt.tight_layout()
 

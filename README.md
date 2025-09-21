@@ -27,7 +27,7 @@ Please follow one of the two supported paths:
 
 ## Quickstart (Counting Environment)
 
-All commands below run online training in the counting environment. Hydra organizes outputs under `tdmpc2/logs/${task}/${seed}/${exp_name}`. A protective guard refuses to overwrite an experiment directory if it already contains `eval.csv`; change `exp_name` to start a new run.
+All commands below run online training in the counting environment. Hydra organizes outputs under `tdmpc2/logs/${task}/${seed}/${exp_name}`. A protective guard refuses to overwrite an experiment directory if it already contains `eval.csv`; change `exp_name` or delete the directory to start a new run.
 
 General pattern:
 
@@ -96,7 +96,7 @@ Run the three runs above. Each run will produce a `baseline_encodings_best.pt`. 
 
 ## Troubleshooting
 
-- Overwrite protection: change `exp_name` if a previous run wrote `eval.csv` in the same work dir.
+- Overwrite protection: change `exp_name` or delete the output dir.
 - CUDA OOM during monitoring: reduce `monitor_batch_size` in the config.
 - WandB disabled by default: set `enable_wandb=true` and fill `wandb_project`, `wandb_entity` if you want remote logging.
 
