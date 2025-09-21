@@ -59,7 +59,6 @@ save_agent: true
 seed: 2022
 monitor_freq: 6000  #6000
 dim_monitor_steps: 30_000
-full_rank: false
 simnorm: false
 simnorm_dim: 8
 save_obs_for_rankme: false

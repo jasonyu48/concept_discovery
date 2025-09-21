@@ -4,7 +4,6 @@ import torch
 import torch.nn as nn
 
 from common import layers, math, init
-from common import full_rank_layers
 from tensordict import TensorDict
 from tensordict.nn import TensorDictParams
 
@@ -129,10 +128,7 @@ class WorldModel(nn.Module):
 			self._reward_current_layers = None
 			self._reward_current = None
 		self._termination = layers.mlp(cfg.latent_dim + cfg.task_dim, 2*[cfg.mlp_dim], 1) if cfg.episodic else None
-		if cfg.full_rank:
-			self._pi = full_rank_layers.full_rank_mlp(cfg.latent_dim + cfg.task_dim, 2*[cfg.mlp_dim], 2*cfg.action_dim)
-		else:
-			self._pi = layers.mlp(cfg.latent_dim + cfg.task_dim, 2*[cfg.mlp_dim], 2*cfg.action_dim)
+		self._pi = layers.mlp(cfg.latent_dim + cfg.task_dim, 2*[cfg.mlp_dim], 2*cfg.action_dim)
 		self._Qs = layers.Ensemble([layers.mlp(cfg.latent_dim + cfg.action_dim + cfg.task_dim, 2*[cfg.mlp_dim], max(cfg.num_bins, 1), dropout=cfg.dropout) for _ in range(cfg.num_q)])
 		# Initialize optional decoder for pixel reconstruction
 		if getattr(cfg, 'enable_decoder', True):
