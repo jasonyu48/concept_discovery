@@ -116,7 +116,7 @@ task_dim: 96
 num_q: 1
 dropout: 0.01
 num_jepa_layers: 1
-num_jepa_encoders: 3 # New: number of parallel encoders
+num_jepa_encoders: 3 # New: number of commutative encoders
 
 # logging
 wandb_project: ???
