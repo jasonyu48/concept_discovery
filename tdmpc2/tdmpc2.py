@@ -72,15 +72,21 @@ class TDMPC2(torch.nn.Module):
 			# Scale only encoders for this optimizer
 			group_e0 = {'params': params_e0, 'lr': self.cfg.lr * self.cfg.enc_lr_scale}
 			group_comm_enc = {'params': list(self.model._comm_encoders.parameters()), 'lr': self.cfg.lr * self.cfg.enc_lr_scale}
-			# Use base lr (no enc_lr_scale) for comm maps, dynamics and current-reward heads
+			# Scale commutative maps c_i by enc_lr_scale as requested
+			groups = [group_e0, group_comm_enc]
+			if getattr(self.model, '_comm_maps', None) is not None:
+				group_comm_maps = {'params': list(self.model._comm_maps.parameters()), 'lr': self.cfg.lr * self.cfg.enc_lr_scale}
+				groups.append(group_comm_maps)
+			# Use base lr for comm dynamics and current-reward heads
 			params_other = []
-			params_other += list(self.model._comm_maps.parameters())
 			if getattr(self.model, '_comm_dyns', None) is not None:
 				params_other += list(self.model._comm_dyns.parameters())
 			if getattr(self.model, '_reward_current_comm', None) is not None:
 				params_other += list(self.model._reward_current_comm.parameters())
-			group_other = {'params': params_other, 'lr': self.cfg.lr}
-			self.eq_optim = torch.optim.Adam([group_e0, group_comm_enc, group_other], lr=self.cfg.lr, capturable=capturable)
+			if len(params_other) > 0:
+				group_other = {'params': params_other, 'lr': self.cfg.lr}
+				groups.append(group_other)
+			self.eq_optim = torch.optim.Adam(groups, lr=self.cfg.lr, capturable=capturable)
 		self.pi_optim = torch.optim.Adam(self.model._pi.parameters(), lr=self.cfg.lr, eps=1e-5, capturable=capturable)
 		self.model.eval()
 		self.scale = RunningScale(cfg)
