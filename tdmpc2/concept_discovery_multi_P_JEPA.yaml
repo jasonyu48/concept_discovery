@@ -5,6 +5,7 @@ defaults:
 # environment
 task: counting4
 discrete_action: false
+two_action_values: true
 action_dim: 1
 obs: rgb
 episodic: true

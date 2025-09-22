@@ -230,7 +230,7 @@ class TDMPC2(torch.nn.Module):
 			# Counting task: provide task-specific random sampling
 			if 'counting' in self.cfg.task and getattr(self.cfg, 'discrete_action', False):
 				# Sample one-hot over actions; if two_actions → no no-op
-				if getattr(self.cfg, 'two_actions', False):
+				if getattr(self.cfg, 'two_actions', True):
 					probs = torch.tensor([0.5, 0.5], device=self.device)
 					idx = torch.multinomial(probs, num_samples=1).item()
 				else:
@@ -238,6 +238,10 @@ class TDMPC2(torch.nn.Module):
 					idx = torch.multinomial(probs, num_samples=1).item()
 				a_unmasked = torch.zeros(self.cfg.action_dim, device=self.device)
 				a_unmasked[idx] = 1.0
+			elif 'counting' in self.cfg.task and getattr(self.cfg, 'two_action_values', False):
+				a_unmasked = torch.randint(
+					0, 2, (self.cfg.action_dim,), device=self.device, dtype=torch.float32
+				).sub_(0.5)
 			else:
 				# Directly sample a random action in [-1, 1] without any MPPI compute
 				a_unmasked = torch.empty(self.cfg.action_dim, device=self.device).uniform_(-1.0, 1.0)
