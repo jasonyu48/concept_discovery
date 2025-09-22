@@ -168,6 +168,54 @@ def mlp(in_dim, mlp_dims, out_dim, act=None, dropout=0., layernorm: bool = True)
 	return nn.Sequential(*layers_out)
 
 
+class ResidualMLP(nn.Module):
+	"""
+	MLP with a residual skip connection from input to output.
+
+	- Main path mirrors `mlp` (optional LayerNorm+Mish in hidden layers, optional dropout on first hidden layer).
+	- Skip path is identity when `in_dim == out_dim`, otherwise a linear projection to match dimensions.
+	- No activation is applied after the residual addition (keeps latent in R^D as in the non-residual encoder).
+	"""
+
+	def __init__(self, in_dim: int, mlp_dims, out_dim: int, act=None, dropout: float = 0., layernorm: bool = True):
+		super().__init__()
+		if isinstance(mlp_dims, int):
+			mlp_dims = [mlp_dims]
+		# Build main MLP using the same conventions as `mlp`
+		dims = [in_dim] + mlp_dims + [out_dim]
+		layers_main: list[nn.Module] = []
+		for i in range(len(dims) - 2):
+			in_d, out_d = dims[i], dims[i + 1]
+			if layernorm:
+				layers_main.append(NormedLinear(in_d, out_d, dropout=dropout * (i == 0)))
+			else:
+				mods = [nn.Linear(in_d, out_d)]
+				if dropout and i == 0:
+					mods.append(nn.Dropout(dropout, inplace=False))
+				mods.append(nn.Mish(inplace=False))
+				layers_main.append(nn.Sequential(*mods))
+		# Final layer (optionally followed by act)
+		last_in, last_out = dims[-2], dims[-1]
+		if act is not None:
+			if layernorm:
+				layers_main.append(NormedLinear(last_in, last_out, act=act))
+			else:
+				layers_main.append(nn.Sequential(nn.Linear(last_in, last_out), act))
+		else:
+			layers_main.append(nn.Linear(last_in, last_out))
+		self.main = nn.Sequential(*layers_main)
+		# Skip path
+		self.skip = nn.Identity() if in_dim == out_dim else nn.Linear(in_dim, out_dim, bias=True)
+
+	def forward(self, x: torch.Tensor) -> torch.Tensor:
+		return self.main(x) + self.skip(x)
+
+
+def mlp_residual(in_dim, mlp_dims, out_dim, act=None, dropout: float = 0., layernorm: bool = True):
+	"""Convenience builder to mirror `mlp` API but with a residual connection."""
+	return ResidualMLP(in_dim, mlp_dims, out_dim, act=act, dropout=dropout, layernorm=layernorm)
+
+
 # -----------------------------------------------
 # CNN encoder helper
 # -----------------------------------------------
