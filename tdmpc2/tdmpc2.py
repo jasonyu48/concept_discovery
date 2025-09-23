@@ -63,30 +63,6 @@ class TDMPC2(torch.nn.Module):
 		capturable = torch.cuda.is_available()
 		self.optim = torch.optim.Adam(param_groups, lr=self.cfg.lr, capturable=capturable)
 
-		# --- Optional separate optimizer for L_eq (commutative encoders & E_0) ---
-		self.eq_optim = None
-		N_comm = int(getattr(self.model, 'num_commutative_encoders', 0))
-		if N_comm > 0 and hasattr(self.model, '_comm_encoders') and self.model._comm_encoders is not None:
-			# E_0 encoder params (all parts that contribute to encode_e0)
-			params_e0 = list(self.model._encoder.parameters()) + list(self.model._enc_layers.parameters())
-			# Scale only encoders for this optimizer
-			group_e0 = {'params': params_e0, 'lr': self.cfg.lr * self.cfg.enc_lr_scale}
-			group_comm_enc = {'params': list(self.model._comm_encoders.parameters()), 'lr': self.cfg.lr * self.cfg.enc_lr_scale}
-			# Scale commutative maps c_i by enc_lr_scale as requested
-			groups = [group_e0, group_comm_enc]
-			if getattr(self.model, '_comm_maps', None) is not None:
-				group_comm_maps = {'params': list(self.model._comm_maps.parameters()), 'lr': self.cfg.lr * self.cfg.enc_lr_scale}
-				groups.append(group_comm_maps)
-			# Use base lr for comm dynamics and current-reward heads
-			params_other = []
-			if getattr(self.model, '_comm_dyns', None) is not None:
-				params_other += list(self.model._comm_dyns.parameters())
-			if getattr(self.model, '_reward_current_comm', None) is not None:
-				params_other += list(self.model._reward_current_comm.parameters())
-			if len(params_other) > 0:
-				group_other = {'params': params_other, 'lr': self.cfg.lr}
-				groups.append(group_other)
-			self.eq_optim = torch.optim.Adam(groups, lr=self.cfg.lr, capturable=capturable)
 		self.pi_optim = torch.optim.Adam(self.model._pi.parameters(), lr=self.cfg.lr, eps=1e-5, capturable=capturable)
 		self.model.eval()
 		self.scale = RunningScale(cfg)
@@ -377,7 +353,6 @@ class TDMPC2(torch.nn.Module):
 		# ------------------------------------------------------------------
 		enc_all = self.model.encode_all_layers(obs, task)
 		enc_obs = enc_all[-1]
-		# Note: commutative encoder latents are only computed in the separate L_eq pass
 
 		# ------------------------------------------------------------------
 		# Pairwise shrink loss: encourage smaller pairwise distances between
@@ -601,58 +576,6 @@ class TDMPC2(torch.nn.Module):
 		pi_grad_norm = torch.nn.utils.clip_grad_norm_(self.model._pi.parameters(), self.cfg.grad_clip_norm)
 		
 		self.optim.step()
-		# Separate forward/backward/step for L_eq with its own optimizer
-		l_eq_scalar = None
-		if self.eq_optim is not None and int(getattr(self.model, 'num_commutative_encoders', 0)) > 0:
-			self.eq_optim.zero_grad(set_to_none=True)
-			# Recompute encodings for eq pass to get a fresh graph
-			z0_eq = self.model.encode_e0(obs, task)[:-1]  # (T, B, D)
-			z_comm_all_eq = self.model.encode_comm_all(obs, task)  # list of (T+1, B, D)
-			T_steps = z0_eq.shape[0]
-			# 1) Alignment loss: encourage all mapped encoders to agree pairwise in E0-space
-			c_list_eq = self.model.comm_map_all([z[:-1] for z in z_comm_all_eq])  # list of (T, B, D)
-			Z_align = [z0_eq] + c_list_eq  # length = 1 + N_comm
-			L_eq = torch.tensor(0.0, device=self.device)
-			n_src = len(Z_align)
-			n_pairs = n_src * (n_src - 1) // 2
-			for i in range(n_src):
-				for j in range(i+1, n_src):
-					L_eq = L_eq + F.mse_loss(Z_align[i], Z_align[j])
-			if n_pairs > 0:
-				L_eq = L_eq / n_pairs
-			# 2) Commutative consistency loss per E_i with its own dynamics next_comm
-			L_cons_comm = torch.tensor(0.0, device=self.device)
-			if T_steps >= 1:
-				for idx, z_seq_i in enumerate(z_comm_all_eq):
-					# z_seq_i: (T+1, B, D)
-					for t, _action in enumerate(action.unbind(0)):
-						z_t = z_seq_i[t]
-						z_tp1_target = z_seq_i[t+1]
-						z_pred = self.model.next_comm(z_t, _action, task, idx=idx)
-						L_cons_comm = L_cons_comm + F.mse_loss(z_pred, z_tp1_target) * self.cfg.rho**t
-				# Normalise by horizon
-				L_cons_comm = L_cons_comm / max(self.cfg.horizon, 1)
-			# 3) Commutative current-reward loss per E_i (optional)
-			L_curr_comm = torch.tensor(0.0, device=self.device)
-			if getattr(self.cfg, 'current_reward', False):
-				preaction_targets = reward_pre
-				if preaction_targets is not None:
-					for idx, z_seq_i in enumerate(z_comm_all_eq):
-						for t in range(T_steps):
-							z_it = z_seq_i[t]
-							pred_logits = self.model.reward_current_comm(z_it, task, idx=idx)
-							L_curr_comm = L_curr_comm + math.soft_ce(pred_logits, preaction_targets[t], self.cfg).mean() * self.cfg.rho**t
-					# Normalise by horizon
-					L_curr_comm = L_curr_comm / max(self.cfg.horizon, 1)
-			# Combine and step
-			total_eq = (
-				getattr(self.cfg, 'L_eq_coef', 1.0) * L_eq +
-				self.cfg.consistency_coef * L_cons_comm +
-				self.cfg.reward_coef * L_curr_comm
-			)
-			total_eq.backward()
-			self.eq_optim.step()
-			l_eq_scalar = float(L_eq.detach().item())
 		self.pi_optim.step()
 		
 		self.optim.zero_grad(set_to_none=True)
