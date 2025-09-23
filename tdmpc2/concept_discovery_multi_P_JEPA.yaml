@@ -5,7 +5,7 @@ defaults:
 # environment
 task: counting4
 discrete_action: false
-two_action_values: false
+two_action_values: true
 action_dim: 1
 obs: rgb
 episodic: true
@@ -21,7 +21,7 @@ eval_freq: 6_000
 # training
 steps: 1_000_000
 batch_size: 256
-reward_coef: 10 # set to 10 for less fluctuation in cluster acc
+reward_coef: 20 # set to 10 for less fluctuation in cluster acc
 value_coef: 0.1
 termination_coef: 1
 consistency_coef: 2
@@ -42,7 +42,7 @@ discount_min: 0.95
 discount_max: 0.995
 buffer_size: 100_000
 q_sample_ratio: 1.0  # Ratio of buffer data visible to Q-function and collapse prevention training (0.0-1.0)
-exp_name: concept_discovery_multi_P_JEPA_20_layers10_residual
+exp_name: concept_discovery_multi_P_JEPA_20_layers11_residual_two_action_values_more_reward
 train_print_freq: 100  # print training episodes every 100 episodes instead of every episode
 data_dir: ???
 JEPA_sg: false

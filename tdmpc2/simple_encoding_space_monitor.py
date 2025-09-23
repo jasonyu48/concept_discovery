@@ -913,6 +913,7 @@ class SimpleEncodingSpaceMonitor:
             ax.set_title('Encoding Space Size', fontsize=12, fontweight='bold')
             ax.set_xlabel('Training Steps')
             ax.set_ylabel('Avg. Pairwise Distance')
+            ax.set_ylim(0, 1.5)
             ax.grid(True, alpha=0.3)
             subplot_idx += 1
 
@@ -1011,7 +1012,7 @@ class SimpleEncodingSpaceMonitor:
                 ax.set_title('Encoding Space Size (first vs top)', fontsize=12, fontweight='bold')
                 ax.set_xlabel('Training Steps')
                 ax.set_ylabel('Avg. Pairwise Distance')
-                ax.set_ylim(0, 8)
+                ax.set_ylim(0, 1.5)
                 ax.grid(True, alpha=0.3)
                 ax.legend()
             subplot_idx += 1
@@ -1073,7 +1074,8 @@ class SimpleEncodingSpaceMonitor:
             ax.set_title('Training Losses', fontsize=12, fontweight='bold')
             ax.set_xlabel('Training Steps')
             ax.set_ylabel('Loss')
-            ax.set_ylim(0.0, 0.2)
+            ax.set_ylim(1e-5, 2.0)
+            ax.set_yscale('log')
             ax.grid(True, alpha=0.3)
             ax.legend()
             subplot_idx += 1
