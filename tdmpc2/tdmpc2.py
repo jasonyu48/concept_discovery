@@ -606,9 +606,6 @@ class TDMPC2(torch.nn.Module):
 			"pi_scaled_entropy": info_pi["scaled_entropy"],
 			"pi_scale": self.scale.value,
 		})
-		# Attach L_eq scalar for logging if computed
-		if l_eq_scalar is not None:
-			info.update({"L_eq": torch.tensor(l_eq_scalar, device=self.device)})
 		if self.cfg.episodic:
 			info.update(math.termination_statistics(torch.sigmoid(termination_pred[-1]), terminated[-1]))
 		
