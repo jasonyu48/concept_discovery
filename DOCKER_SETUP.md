@@ -128,12 +128,5 @@ docker run --rm --gpus all nvidia/cuda:12.4-runtime-ubuntu22.04 nvidia-smi
 ```bash
 # Reduce batch size for smaller GPUs
 docker run --rm --gpus all -v $(pwd):/workspace -w /workspace \
-  tdmpc2:latest python train.py task=counting5 batch_size=128 obs=rgb steps=10000
-```
-
-### Slow Performance on CPU
-```bash
-# Use state observations instead of RGB for CPU training
-docker run --rm -v $(pwd):/workspace -w /workspace \
-  tdmpc2:latest python train.py task=counting5 obs=state steps=10000
+  tdmpc2:simple python train.py task=counting5 batch_size=128 obs=rgb steps=10000
 ```
