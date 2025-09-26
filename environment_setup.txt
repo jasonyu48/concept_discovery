@@ -1,4 +1,4 @@
-#This works for headless server. If this does not work, use docker. The docker file is provided in ./docker
+#This works for headless server. If this does not work, use docker. See ./DOCKER_SETUP.md
 
 conda create -n tdmpc2 python=3.9 -y
 conda activate tdmpc2
@@ -42,3 +42,4 @@ python train.py task=cheetah-run steps=100000
 python evaluate.py task=cheetah-run checkpoint=./tdmpc2/logs/cheetah-run/1/default/models/final.pt save_video=true
 
 #test
+
