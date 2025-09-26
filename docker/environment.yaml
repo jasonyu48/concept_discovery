@@ -35,6 +35,7 @@ dependencies:
     - pandas==2.0.3
     - wandb==0.17.4
     - scikit-learn==1.6.1
+    - reptrix
     ####################
     # Gym:
     # (unmaintained but required for maniskill2/meta-world)
